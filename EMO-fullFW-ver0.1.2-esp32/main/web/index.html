@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EMO Bridge</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <span id="link" class="dot"></span>
+  <h1>EMO Bridge</h1>
+  <span id="ip" class="pill" style="margin-left:auto"></span>
+</header>
+<main>
+
+  <div class="card">
+    <h2>Status</h2>
+    <div class="bat">
+      <div class="shell"><div class="fill" id="batfill"></div></div>
+      <div><b id="batpct">—</b><small id="batinfo">battery</small></div>
+    </div>
+    <div class="grid" id="stat"></div>
+  </div>
+
+  <div class="card">
+    <h2>Audio test</h2>
+    <small>Mic level is live from the robot. “Record 3 s” captures the robot mic and opens it as a WAV in a new tab.</small>
+    <div class="meter" style="margin:12px 0"><i id="bar"></i></div>
+    <div class="btns">
+      <button id="tone">Test tone on robot</button>
+      <button id="micwav" class="ghost">Record 3 s on robot → WAV</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Motion</h2>
+    <small>Plays the stock <code>.mot</code> files from <code>/spiffs/mot</code> on the four leg servos. Walk and turn frames
+    run the stock gait oscillator; frames of other stock generators are held (shown as "gait frames").</small>
+    <div class="row" style="margin-top:12px">
+      <div><label>Motion file</label><select id="motsel"></select></div>
+      <div><label>Speed &times; (empty = default) &middot; options</label>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="motspeed" placeholder="default" style="width:80px">
+        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="motfit" style="width:auto"> fit to the music</label>
+        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="motmedia" checked style="width:auto"> face + music on the K210</label></div></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div><label>Pose: left legs, right legs, left foot, right foot (deg) &middot; time (ms)</label>
+        <div style="display:flex;gap:6px"><input id="p0" value="90"><input id="p1" value="90"><input id="p2" value="90"><input id="p3" value="90"><input id="pms" value="500"></div></div>
+    </div>
+    <div class="btns">
+      <button id="motplay">Play</button>
+      <button id="motloop" class="ghost">Play in loop</button>
+      <button id="motstop" class="ghost">Stop</button>
+      <button id="motpose" class="ghost">Go to pose</button>
+      <button id="motrel" class="ghost">Servos off</button>
+      <span id="motst" class="pill"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Robot controls</h2>
+    <small>Every K210 command from <code>uart_commands.md</code>, sent as-is over UART1. Fields next to a button are the
+    parameters (number or text); the reply shows the exact bytes sent and whether the K210 ACKed. Same thing over HTTP:
+    <code>POST /api/controls {"action":"anim_stay_wink_1"}</code>.</small>
+    <div class="ctl" id="controls"></div>
+    <div id="ctlres"></div>
+  </div>
+
+  <div class="card">
+    <h2>Configuration</h2>
+    <div class="row">
+      <div><label>Wi-Fi SSID</label><input id="wifi_ssid"></div>
+      <div><label>Wi-Fi password</label><input id="wifi_pass" type="password" placeholder="(unchanged)"></div>
+    </div>
+    <div class="row">
+      <div><label>Voice server IP (where each utterance is streamed)</label><input id="host_ip" placeholder="192.168.137.1"></div>
+      <div><label>Voice server port</label><input id="host_port" placeholder="7007"></div>
+    </div>
+    <div class="row">
+      <div><label>Default motion speed, % of the file timing (100 = as authored, matches the dance songs)</label><input id="motion_speed" placeholder="100"></div>
+    </div>
+    <div class="btns"><button id="save">Save</button><span id="saved" class="pill"></span></div>
+    <small>Wi-Fi changes apply at the next boot; the voice server address applies at the next utterance.
+    Server → robot playback: <code>POST http://&lt;robot-ip&gt;/api/play_pcm</code> with raw 48 kHz mono int16 LE.</small>
+  </div>
+
+  <div class="card">
+    <h2>Power</h2>
+    <small>Drops the power-enable pin: the whole robot switches off, like holding the button. On the charger it may stay powered.</small>
+    <div class="btns"><button id="poweroff" style="background:var(--bad);color:#fff">Turn the robot off</button><span id="powerst" class="pill"></span></div>
+  </div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

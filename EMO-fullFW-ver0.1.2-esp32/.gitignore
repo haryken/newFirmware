@@ -1,0 +1,22 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+compile_commands.json
+
+# Editors / OS
+.vscode/
+.clangd/
+.ccls-cache/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.bak
+*.tmp
+*.log
+
+# Python helpers run from the tree
+__pycache__/
+*.pyc

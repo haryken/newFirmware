@@ -1,0 +1,41 @@
+# ---- secrets (never commit) ----
+brain/anthropic_key.txt
+brain/hue_key.txt
+brain/stream_key.txt
+brain/pc/pc_secret.txt
+brain/spotify/spotify_app.txt
+brain/spotify/config/
+sk-ant-*
+*.key
+.env
+
+# ---- machine-specific / generated ----
+brain/paths.json
+brain/pc/settings.json
+*.log
+__pycache__/
+*.pyc
+.venv/
+pocket/.venv/
+brain/pc/.venv/
+
+# ---- downloads, models, binaries ----
+brain/llama/
+brain/spotify/bin/
+*.gguf
+*.safetensors
+*.pt
+*.pth
+
+# ---- audio, datasets, training output ----
+brain/utterances/
+brain/bench/real/
+brain/bench/testset/
+brain/bench/results/
+samples/
+dataset/
+run/
+pocket/voices/
+clips.tsv
+*.wav
+*.mp3

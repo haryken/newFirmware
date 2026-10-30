@@ -1,0 +1,148 @@
+menu "EMO-Bridge configuration"
+
+    comment "GPIO wiring to the K210 (emo-libre/newFirmware Hardware/GPIO_MAP.md)"
+
+    config EMO_K210_UART_NUM
+        int "UART port number for the K210 control link"
+        default 1
+        range 1 2
+
+    config EMO_K210_UART_TX
+        int "ESP32 -> K210 UART TX GPIO"
+        default 12
+    config EMO_K210_UART_RX
+        int "K210 -> ESP32 UART RX GPIO"
+        default 4
+
+    config EMO_SPI_HOST
+        int "SPI host (2 = HSPI, 3 = VSPI)"
+        default 2
+        range 1 3
+    config EMO_SPI_SCLK
+        int "SPI SCLK GPIO"
+        default 14
+    config EMO_SPI_MOSI
+        int "SPI MOSI GPIO (ESP32 -> K210)"
+        default 15
+    config EMO_SPI_MISO
+        int "SPI MISO GPIO (K210 -> ESP32)"
+        default 2
+    config EMO_SPI_CS
+        int "SPI chip-select GPIO (driven manually)"
+        default 13
+    config EMO_SPI_HZ
+        int "SPI clock in Hz"
+        default 8000000
+
+    config EMO_K210_RESET_GPIO
+        int "K210 RESETN GPIO (active-low pulse)"
+        default 22
+    config EMO_PWR_EN_GPIO
+        int "Battery / power-enable GPIO (HIGH = robot powered)"
+        default 23
+
+    comment "K210 SD card safety"
+    config EMO_SD_FACES
+        bool "Send face animations and sounds to the K210 (they are read from its SD card)"
+        default y
+        help
+            Every face video (.avi) and sound (.mp3) is read by the K210 from its own SD
+            card. Turn this off while the card is broken ("sd error"): the boot faces, the
+            wake face, the IP-screen restore and motion media are then not requested, so
+            the K210 is never asked to touch the card. Mic, speaker, motion and the text
+            screen keep working.
+    config EMO_ALLOW_SD_COMMANDS
+        bool "Allow the stock OTA / file-download / SD-read commands on /api/controls"
+        default n
+        help
+            Off (default): the 16 K210 commands that, in the stock firmware, write the
+            K210 SD card, update its firmware or make it push SD files over SPI
+            (ota_*, k210_update, photo_*, update_failed, read_file, read_sd_buf) are
+            compiled out of /api/controls and answer HTTP 403. On: they are available
+            but still need "confirm":true in the request.
+    config EMO_BOOT_FILE_SESSION
+        bool "Send the stock file-session frames 2C / 2D during boot"
+        default y
+        help
+            The stock boot sequence wraps its profile.json read in 2C (begin) / 2D (end).
+            This firmware never requests the file, so the pair only opens and closes an
+            empty session on the K210 (read-only). Turn off to skip them entirely.
+
+    comment "Leg servos (GPIO_MAP.md): 50 Hz PWM, driven from /spiffs/mot/*.mot"
+    config EMO_SERVO_LL_GPIO
+        int "Left legs servo GPIO (.mot byte 11)"
+        default 21
+    config EMO_SERVO_RL_GPIO
+        int "Right legs servo GPIO (.mot byte 12)"
+        default 25
+    config EMO_SERVO_LF_GPIO
+        int "Left foot servo GPIO (.mot byte 13)"
+        default 5
+    config EMO_SERVO_RF_GPIO
+        int "Right foot servo GPIO (.mot byte 14)"
+        default 26
+    config EMO_SERVO_HOLD_AT_BOOT
+        bool "Drive the servos to 90 deg at boot, as the stock firmware does"
+        default n
+        help
+            Off: the servos stay unpowered until the first motion. On: they are
+            driven to the neutral pose at boot (and released after EMO_SERVO_IDLE_MS
+            like any other move).
+    config EMO_SERVO_IDLE_MS
+        int "Release the servos (cut the PWM) this long after the last move, ms (0 = never)"
+        default 1500
+        help
+            A servo holding its position draws current the whole time; the robot
+            stands fine with the legs limp. After a motion, gait or pose ends the
+            PWM is cut once the legs have been still for this long. The next move
+            powers them again.
+
+    config EMO_MOTION_SPEED_PCT
+        int "Default motion speed, percent of the .mot file timing"
+        default 100
+        range 25 400
+        help
+            Used for every motion played without an explicit speed; changeable at
+            run time from the web page (setting motion_speed). 100 = the authored
+            timing, which already matches the dance songs (d1_EmoDance: 40.0 s of
+            frames vs a 40.1 s mp3; median of the 13 dances 0.97). Larger values
+            make every motion faster but dances end before their music.
+
+    comment "Battery meter (stock ESP32 path: ADC1_CH3 = GPIO39, sense input GPIO36)"
+    config EMO_BAT_ADC_GPIO
+        int "Battery voltage ADC GPIO (must be an ADC1 pin)"
+        default 39
+    config EMO_BAT_SENSE_GPIO
+        int "Battery sense input GPIO (stock 'GPIO 0x24', selects the calibration offset)"
+        default 36
+    config EMO_BAT_OLD_SERVO_THRESHOLDS
+        bool "Use the old-servo board battery thresholds"
+        default n
+        help
+            The stock firmware picks one of two tier tables from its servo
+            hardware detection. Off = new-servo table (l1<=3529 .. l4<=3999 mV),
+            on = old-servo table (l1<=3629 .. l4<=4099 mV).
+
+    comment "Wi-Fi (also editable on the web page; saved in NVS)"
+    config EMO_WIFI_SSID
+        string "Wi-Fi SSID to join at first boot (blank = open the fallback SoftAP)"
+        default ""
+    config EMO_WIFI_PASS
+        string "Wi-Fi password"
+        default ""
+
+    config EMO_HOST_IP
+        string "Audio server IPv4 (each wake-word utterance is streamed here)"
+        default "192.168.137.1"
+    config EMO_HOST_PORT
+        int "Audio server TCP port"
+        default 7007
+
+    config EMO_AP_SSID
+        string "Fallback SoftAP SSID (when no Wi-Fi is configured)"
+        default "emo-bridge"
+    config EMO_AP_PASS
+        string "Fallback SoftAP password (>=8 chars, blank = open)"
+        default "emobridge"
+
+endmenu

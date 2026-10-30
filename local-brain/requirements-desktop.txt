@@ -1,0 +1,8 @@
+# EMO voice cloning / fine-tuning / TTS service on the GPU desktop (RX 9070 XT).
+# 1. Install torch FIRST with AMD's build (see README.md), then:  pip install -r requirements-desktop.txt
+numpy
+miniaudio          # mp3 decoding for prepare_dataset.py (or have ffmpeg on PATH)
+coqui-tts>=0.27    # XTTS v2 (zero-shot clone + fine-tuning); pulls `trainer`, transformers
+# optional second engine:
+# chatterbox-tts
+praat-parselmouth  # child-voice post-processing (voice_fx.py)
