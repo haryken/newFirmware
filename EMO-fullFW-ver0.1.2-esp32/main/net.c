@@ -1,7 +1,8 @@
-// net.c — Wi-Fi STA with open SoftAP + captive DNS for first-time config.
+// net.c â€” Wi-Fi STA with open SoftAP + captive DNS for first-time config.
 #include "net.h"
 #include "settings.h"
 #include "captive_dns.h"
+#include "http_server.h"
 #include "sdkconfig.h"
 #include <string.h>
 #include <stdlib.h>
@@ -20,6 +21,8 @@ static EventGroupHandle_t s_eg;
 #define GOT_IP   BIT0
 static bool s_connected;
 static bool s_softap;
+static bool s_ap_fallback;   // saved SSID unreachable -> open AP alongside STA retries
+static int  s_sta_fail;
 static esp_netif_t *s_sta, *s_ap;
 static char s_ip[16] = "0.0.0.0";
 
@@ -27,17 +30,44 @@ static portMUX_TYPE s_scan_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_scan_busy;
 static char *s_scan_json;   // last completed result, guarded by s_scan_mux
 
+static void portal_task(void *arg)
+{
+    (void)arg;
+    http_portal_start();
+    vTaskDelete(NULL);
+}
+
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         if (!s_softap) esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *d = data;
         s_connected = false;
         if (!s_softap) esp_wifi_connect();
+        if (++s_sta_fail == 3 && !s_softap && !s_ap_fallback) {
+            // Wrong password / router gone: open the config hotspot too (STA keeps retrying).
+            wifi_config_t ap = {0};
+            strncpy((char *)ap.ap.ssid, CONFIG_EMO_AP_SSID, sizeof(ap.ap.ssid) - 1);
+            ap.ap.ssid_len = strlen(CONFIG_EMO_AP_SSID);
+            ap.ap.max_connection = 4;
+            ap.ap.authmode = WIFI_AUTH_OPEN;
+            ap.ap.channel = 1;
+            esp_wifi_set_mode(WIFI_MODE_APSTA);
+            esp_wifi_set_config(WIFI_IF_AP, &ap);
+            s_ap_fallback = true;
+            esp_netif_ip_info_t info;
+            esp_ip4_addr_t gw; gw.addr = ESP_IP4TOADDR(192, 168, 4, 1);
+            if (esp_netif_get_ip_info(s_ap, &info) == ESP_OK) gw = info.ip;
+            captive_dns_start(gw);
+            xTaskCreate(portal_task, "portal", 4096, NULL, 5, NULL);
+            ESP_LOGW(TAG, "wifi '%s' failed (reason %d) -> hotspot '%s' @ 192.168.4.1", "saved", d ? (int)d->reason : -1, CONFIG_EMO_AP_SSID);
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         esp_ip4addr_ntoa(&e->ip_info.ip, s_ip, sizeof(s_ip));
         s_connected = true;
+        s_sta_fail = 0;
         xEventGroupSetBits(s_eg, GOT_IP);
         ESP_LOGI(TAG, "got IP %s", s_ip);
     }
@@ -203,7 +233,7 @@ char *net_wifi_scan_json(void)
 
     if (busy) return strdup("{\"scanning\":true}");
     if (copy) return copy;
-    // No results yet — kick a scan and tell the UI to poll.
+    // No results yet â€” kick a scan and tell the UI to poll.
     net_wifi_scan_start();
     return strdup("{\"scanning\":true}");
 }

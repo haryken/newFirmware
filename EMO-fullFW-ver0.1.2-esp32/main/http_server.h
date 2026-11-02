@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 void http_server_start(void);
+void http_portal_start(void);   // extra :80 captive portal when the hotspot opens as a fallback
 #ifdef __cplusplus
 }
 #endif

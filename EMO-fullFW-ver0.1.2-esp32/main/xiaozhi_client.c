@@ -91,7 +91,10 @@ typedef enum {
     XZ_CMD_FOLLOWUP = 4,
     XZ_CMD_RECOVER  = 5,
     XZ_CMD_HOME     = 6,    // ws lost / idle too long -> mic IDLE + "speak4" face
+    XZ_CMD_SKILL_HOME = 7,  // a robot skill (sing/dance/...) was started: end the conversation quietly
 } xz_cmd_t;
+
+static volatile bool s_home_quiet;   // go_home_work: do not cover a playing skill with speak4
 
 static QueueHandle_t s_cmd_q;
 
@@ -600,6 +603,14 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
         return;
     }
     mcp_reply(id, ok, msg);
+    // Every robot skill ends the conversation (stock: one command per wake word).
+    // Kept open: stop, play_face, timer and the volume tools.
+    if (ok && !strncmp(name, "self.robot.", 11) && strcmp(name, "self.robot.stop") &&
+        strcmp(name, "self.robot.play_face") && strcmp(name, "self.robot.timer") && s_cmd_q) {
+        xz_cmd_t c = XZ_CMD_SKILL_HOME;
+        xQueueSend(s_cmd_q, &c, 0);
+        ESP_LOGI(TAG, "skill %s started -> ending conversation", name);
+    }
 }
 
 static void handle_mcp(cJSON *payload)
@@ -1296,9 +1307,9 @@ static void go_home_work(void)
     microphone_mark_closed();                 // else "wake while an utterance is running" would eat emo
 
     bool ack = false;
-    video_play_face("speak4", 0, false, &ack);   // same as web :8080 "Speak 4"
+    if (!s_home_quiet) video_play_face("speak4", 0, false, &ack);   // same as web :8080 "Speak 4"
     behavior_set_voice_busy(false);
-    ESP_LOGI(TAG, "home: idle, say emo (speak4 ack=%d)", (int)ack);
+    ESP_LOGI(TAG, "home: idle, say emo (speak4 ack=%d quiet=%d)", (int)ack, (int)s_home_quiet);
 }
 
 static void session_end_work(void)
@@ -1472,6 +1483,19 @@ static bool on_speaker_idle(void)
     return true;
 }
 
+// A robot skill tool (sing, dance, ...) answered ok: let the server's short
+// "ok, singing" reply play out, then end the conversation without speak4 so the
+// skill owns the face/speaker. Wake word ("emo") is armed again; the user must
+// wake the robot to talk after the skill ends.
+static void skill_home_work(void)
+{
+    vTaskDelay(pdMS_TO_TICKS(1200));            // tool result -> server -> TTS reply
+    for (int i = 0; i < 80 && (s_speaking || s_odec_pending || speaker_busy()); i++)
+        vTaskDelay(pdMS_TO_TICKS(100));         // up to 8 s of "ok!"
+    s_home_quiet = true;
+    go_home_work();
+    s_home_quiet = false;
+}
 static void session_task(void *arg)
 {
     (void)arg;
@@ -1483,6 +1507,7 @@ static void session_task(void *arg)
         else if (cmd == XZ_CMD_FOLLOWUP) followup_work();
         else if (cmd == XZ_CMD_RECOVER) recover_work();
         else if (cmd == XZ_CMD_HOME) go_home_work();
+        else if (cmd == XZ_CMD_SKILL_HOME) skill_home_work();
         else if (cmd == XZ_CMD_PREOPEN) {
             apply_settings_urls();
             if (s_ws_url[0] && (!s_ws || !s_hello_ok)) {
