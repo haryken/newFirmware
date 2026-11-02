@@ -44,7 +44,7 @@ static const char *TAG = "xiaozhi";
 #define OPUS_MAX_PACKET     1500
 #define PCM_ACCUM_CAP       (OPUS_FRAME_SAMP * 2)
 #define WS_RX_BUF           2048
-#define IDLE_CLOSE_MS       90000
+#define IDLE_CLOSE_MS       30000   // no server reply for this long -> back to idle (speak4)
 #define HELLO_TIMEOUT_MS    10000
 
 static SemaphoreHandle_t s_lock;
@@ -67,6 +67,7 @@ static volatile bool s_hello_ok;
 static volatile bool s_listening;
 static volatile bool s_speaking;
 static volatile bool s_session;
+static volatile bool s_ws_self_close;       // close_ws() in progress: ignore its events
 static volatile bool s_recover_pending;     // one post-TTS recover in flight
 static volatile bool s_flush_req;           // xz_sess asks xz_enc to flush tail PCM
 static volatile int64_t s_last_act_us;
@@ -89,6 +90,7 @@ typedef enum {
     XZ_CMD_PREOPEN  = 3,
     XZ_CMD_FOLLOWUP = 4,
     XZ_CMD_RECOVER  = 5,
+    XZ_CMD_HOME     = 6,    // ws lost / idle too long -> mic IDLE + "speak4" face
 } xz_cmd_t;
 
 static QueueHandle_t s_cmd_q;
@@ -144,6 +146,21 @@ static bool frag_append(esp_websocket_event_data_t *ev)
 }
 
 static void touch_act(void) { s_last_act_us = esp_timer_get_time(); }
+
+// True only while the socket is REALLY usable. A server-initiated close
+// (idle timeout) ends in WEBSOCKET_EVENT_CLOSED, not DISCONNECTED, so the
+// s_hello_ok flag alone goes stale and the session keeps feeding a dead socket.
+static bool ws_alive(void)
+{
+    return s_ws && s_hello_ok && esp_websocket_client_is_connected(s_ws);
+}
+
+static void queue_home(void)
+{
+    if (!s_cmd_q) return;
+    xz_cmd_t cmd = XZ_CMD_HOME;
+    xQueueSend(s_cmd_q, &cmd, 0);
+}
 
 static void ensure_ids(void)
 {
@@ -750,6 +767,10 @@ static void handle_json(const char *data, int len)
             s_face_text[sizeof(s_face_text) - 1] = 0;
             s_face_pending = true;  // play path treats stay_* as face name
         }
+    } else if (!strcmp(t, "goodbye")) {
+        // Stock xiaozhi: server ends the conversation -> device goes back to idle.
+        ESP_LOGI(TAG, "server goodbye -> idle");
+        if (s_session) queue_home();
     } else if (!strcmp(t, "mcp")) {
         handle_mcp(cJSON_GetObjectItem(root, "payload"));
     } else if (!strcmp(t, "system")) {
@@ -782,13 +803,19 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *data
         }
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
-        ESP_LOGW(TAG, "ws disconnected");
+    case WEBSOCKET_EVENT_CLOSED:    // server idle-close (close frame) lands here
+    {
+        if (s_ws_self_close) break;     // we are tearing it down ourselves
+        ESP_LOGW(TAG, "ws %s (session=%d)",
+                 id == WEBSOCKET_EVENT_CLOSED ? "closed by server" : "disconnected",
+                 (int)s_session);
         s_hello_ok = false;
         s_listening = false;
         s_speaking = false;
-        s_session = false;
-        behavior_set_voice_busy(false);
+        // Do NOT touch the mic/face here (ws task, 8 KB). Hand over to xz_sess.
+        if (s_session) queue_home();
         break;
+    }
     case WEBSOCKET_EVENT_DATA:
         if (ev->op_code == WS_TRANSPORT_OPCODES_TEXT ||
             ev->op_code == WS_TRANSPORT_OPCODES_BINARY ||
@@ -825,9 +852,11 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *data
 static void close_ws(void)
 {
     if (!s_ws) return;
+    s_ws_self_close = true;
     esp_websocket_client_close(s_ws, pdMS_TO_TICKS(2000));
     esp_websocket_client_destroy(s_ws);
     s_ws = NULL;
+    s_ws_self_close = false;
     s_hello_ok = false;
     s_listening = false;
     s_speaking = false;
@@ -1084,16 +1113,27 @@ static void ota_task(void *arg)
 static void idle_watch_task(void *arg)
 {
     (void)arg;
+    int dead = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(2000));
-        if (!s_session) continue;
-        if (s_speaking) continue;
+        if (!s_session) { dead = 0; continue; }
+
+        // Safety net: socket gone but no event reached us.
+        if (s_ws && !esp_websocket_client_is_connected(s_ws)) {
+            if (++dead >= 2) {
+                ESP_LOGW(TAG, "ws not connected during session -> home");
+                dead = 0;
+                queue_home();
+            }
+            continue;
+        }
+        dead = 0;
+
+        if (s_speaking || s_odec_pending || s_recover_pending || speaker_busy()) continue;
         int64_t now = esp_timer_get_time();
         if (s_last_act_us && (now - s_last_act_us) > (int64_t)IDLE_CLOSE_MS * 1000) {
-            ESP_LOGI(TAG, "session idle timeout, closing");
-            xSemaphoreTake(s_lock, portMAX_DELAY);
-            close_ws();
-            xSemaphoreGive(s_lock);
+            ESP_LOGI(TAG, "no conversation for %d s -> home", IDLE_CLOSE_MS / 1000);
+            queue_home();
         }
     }
 }
@@ -1130,10 +1170,11 @@ static void encode_flush_frame(void)
     if (!s_enc || s_pcm_n < OPUS_FRAME_SAMP) return;
     int enc = opus_encode(s_enc, s_pcm_acc, OPUS_FRAME_SAMP, s_opus_pkt, OPUS_MAX_PACKET);
     s_pcm_n = 0;
-    if (enc > 0 && s_ws && s_hello_ok) {
+    if (enc > 0 && ws_alive()) {
+        // NOT touch_act(): streaming mic silence is not conversation activity,
+        // otherwise the idle timeout can never fire.
         esp_websocket_client_send_bin(s_ws, (const char *)s_opus_pkt, enc, pdMS_TO_TICKS(500));
         s_st.opus_sent++;
-        touch_act();
     }
 }
 
@@ -1143,7 +1184,7 @@ static void encode_drain(void)
         uint8_t r = s_pcm_r;
         pcm_chunk_t *ch = &s_pcm_ring[r % PCM_RING_N];
         s_pcm_r = (uint8_t)((r + 1) % PCM_RING_N);
-        if (!s_session || !s_listening || s_speaking || !s_hello_ok) {
+        if (!s_session || !s_listening || s_speaking || !ws_alive()) {
             s_pcm_n = 0;
             continue;
         }
@@ -1184,7 +1225,11 @@ static void session_begin_work(void)
         speaker_interrupt("xiaozhi barge-in");
         s_speaking = false;
     }
-    need_open = (!s_ws || !s_hello_ok);
+    if (s_session && !ws_alive()) {
+        ESP_LOGW(TAG, "wake: stale session on dead ws -> reconnect");
+        s_session = false;
+    }
+    need_open = !ws_alive();
     xSemaphoreGive(s_lock);
 
     // Never hold s_lock across open_ws (TLS + hello wait up to 10 s).
@@ -1195,6 +1240,7 @@ static void session_begin_work(void)
             behavior_set_voice_busy(false);
             return;
         }
+        behavior_set_voice_busy(true);   // close_ws() inside open_ws cleared it
     }
 
     // Mic after recover — wake's schedule_open may have fired during RESETN.
@@ -1219,6 +1265,42 @@ static void session_begin_work(void)
 
 static void show_listen_face(void);
 
+// Conversation is over (server closed the ws, goodbye, or nobody talked for
+// IDLE_CLOSE_MS): drop the socket, put the K210 back in MODE_IDLE so the wake
+// word ("emo") is armed again, and show the web ":8080 Speak 4" animation.
+static void go_home_work(void)
+{
+    if (!s_session && !s_ws) return;          // already home
+    ESP_LOGI(TAG, "go home: session=%d ws_alive=%d", (int)s_session, (int)ws_alive());
+
+    s_session = false;
+    s_listening = false;
+    s_speaking = false;
+    s_recover_pending = false;
+    s_followup_epoch++;
+    microphone_set_listen_grace_ms(0);
+
+    if (speaker_busy()) {
+        speaker_interrupt("xiaozhi session over");
+        for (int i = 0; i < 30 && speaker_busy(); i++) vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    close_ws();                               // also clears s_session / voice_busy
+    xSemaphoreGive(s_lock);
+
+    if (!k210_link_booting() && k210_link_state() != LINK_SPEAK) {
+        k210_uart_send_mode(K210_MODE_IDLE);  // wake word armed again
+        k210_link_set_state(LINK_IDLE);
+    }
+    microphone_mark_closed();                 // else "wake while an utterance is running" would eat emo
+
+    bool ack = false;
+    video_play_face("speak4", 0, false, &ack);   // same as web :8080 "Speak 4"
+    behavior_set_voice_busy(false);
+    ESP_LOGI(TAG, "home: idle, say emo (speak4 ack=%d)", (int)ack);
+}
+
 static void session_end_work(void)
 {
     if (!s_session) return;
@@ -1241,7 +1323,6 @@ static void session_end_work(void)
     if (stop_utt) {
         send_listen("stop");
         s_listening = false;
-        touch_act();
         ESP_LOGI(TAG, "listen stop (eos)");
     }
     xSemaphoreGive(s_lock);
@@ -1250,6 +1331,7 @@ static void session_end_work(void)
     // Server may still push STT→TTS for the utterance we just closed — wait
     // briefly so we don't open the mic under a reply.
     vTaskDelay(pdMS_TO_TICKS(1800));
+    if (s_session && !ws_alive()) { go_home_work(); return; }
     if (!s_session || s_speaking || s_odec_pending || speaker_busy() ||
         s_recover_pending || s_listening || k210_link_booting())
         return;
@@ -1313,6 +1395,8 @@ static void recover_work(void)
 {
     s_recover_pending = false;
     if (!s_session) return;
+    if (!ws_alive()) { go_home_work(); return; }
+    touch_act();             // playback time must not count as "idle"
     s_speaking = false;
     s_listening = false;
 
@@ -1398,6 +1482,7 @@ static void session_task(void *arg)
         else if (cmd == XZ_CMD_END) session_end_work();
         else if (cmd == XZ_CMD_FOLLOWUP) followup_work();
         else if (cmd == XZ_CMD_RECOVER) recover_work();
+        else if (cmd == XZ_CMD_HOME) go_home_work();
         else if (cmd == XZ_CMD_PREOPEN) {
             apply_settings_urls();
             if (s_ws_url[0] && (!s_ws || !s_hello_ok)) {
@@ -1520,7 +1605,7 @@ void xiaozhi_feed(const int16_t *pcm, size_t samples)
     // RX-safe: copy into PSRAM ring only — no Opus, no WS.
     if (!voice_is_xz() || !s_pcm_ring || !s_pcm_sem) return;
     if (!s_session || !s_listening || s_speaking) return;
-    if (!s_enc || !s_ws || !s_hello_ok || !pcm || !samples) return;
+    if (!s_enc || !ws_alive() || !pcm || !samples) return;
 
     size_t off = 0;
     while (off < samples) {
