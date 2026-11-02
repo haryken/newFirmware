@@ -12,8 +12,13 @@ typedef struct {
     bool     ok;            // FOOT_ID probe succeeded
     uint16_t ch[4];         // filtered channels (stock obj+0x10..)
     uint8_t  mask;          // bit i set when ch[i] looks like a cliff
-    uint16_t thr;           // threshold used for mask
+    uint16_t thr;           // (unused, kept for API)
+    uint16_t thr_ch[4];     // per-channel calibrated threshold (0 = not calibrated)
+    bool     calibrated;
 } foot_cliff_t;
+
+// Stock calibrate: thr = 30% of the current (floor) reading. Call only on the ground.
+esp_err_t foot_cliff_calibrate(void);
 
 // Init I2C (GPIO0 SDA / GPIO19 SCL) and probe FOOT IDs. Safe no-op on failure.
 esp_err_t foot_cliff_start(void);

@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "battery.h"
 #include "sdkconfig.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "esp_log.h"
@@ -73,14 +74,78 @@ static void cliff_react(uint8_t mask)
     s_cliff_cool_us = now + 2500000;
     set_mode("cliff");
     legs_stop();
+    // Stock cliff_edge_react: mask 3 -> cliff_L, 0xC -> cliff_R, every other mask
+    // (single sensor, diagonal, front/rear pair) -> back away + a face with sound.
     if (mask == 0x3) play_mot("cliff_L");
     else if (mask == 0xC) play_mot("cliff_R");
-    else if (mask & 0x3) play_mot("cliff_L");
-    else if (mask & 0xC) play_mot("cliff_R");
-    else play_mot("cliff_B");
+    else {
+        char nm[24];
+        snprintf(nm, sizeof(nm), "explore_back_away%u", (unsigned)(1 + esp_random() % 3));
+        legs_opts_t o = LEGS_OPTS_DEFAULT;
+        o.media = false;
+        if (legs_play(nm, o) != ESP_OK) play_mot("cliff_B");
+        else play_face("mood_wronged", true);
+    }
     ESP_LOGW(TAG, "cliff mask=0x%02x", mask);
 }
 
+// Cliff / lift handling (thresholds from stock foot_cliff_calibrate: 30 % of floor reading).
+//  - 3 or 4 feet off the ground  -> picked up: kick legs (react_pick_up*), then put_down.
+//  - 1 or 2 feet over nothing    -> edge: cliff_L / cliff_R / cliff_B motion.
+static bool s_lifted, s_need_cal = true;
+static int64_t s_cal_at_us, s_lift_react_us;
+static uint8_t s_last_mask;
+
+static void cliff_tick(void)
+{
+    foot_cliff_t f;
+    if (foot_cliff_poll(&f) != ESP_OK) return;
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&s_mux);
+    s_st.cliff_mask = f.mask;
+    memcpy(s_st.cliff_ch, f.ch, sizeof(s_st.cliff_ch));
+    portEXIT_CRITICAL(&s_mux);
+
+    if (f.mask != s_last_mask) {
+        ESP_LOGW(TAG, "cliff mask 0x%x -> 0x%x ch=%u,%u,%u,%u thr=%u,%u,%u,%u", s_last_mask, f.mask,
+                 f.ch[0], f.ch[1], f.ch[2], f.ch[3], f.thr_ch[0], f.thr_ch[1], f.thr_ch[2], f.thr_ch[3]);
+        s_last_mask = f.mask;
+    }
+
+    // (Re)calibrate on the ground: first boot, after undock, after a reaction.
+    if (s_need_cal && f.mask == 0 && now >= s_cal_at_us) {
+        if (foot_cliff_calibrate() == ESP_OK) s_need_cal = false;
+        else s_cal_at_us = now + 2000000;
+    }
+    if (!f.calibrated || s_st.docked || s_petting) return;
+
+    int bits = __builtin_popcount(f.mask);
+    if (bits >= 3) {
+        if (!s_lifted) { s_lifted = true; s_lift_react_us = 0; set_mode("lifted"); }
+        if (now >= s_lift_react_us) {
+            s_lift_react_us = now + 3500000;
+            legs_stop();
+            char nm[24];
+            snprintf(nm, sizeof(nm), "react_pick_up%u", (unsigned)(1 + esp_random() % 5));
+            play_mot(nm);
+            ESP_LOGW(TAG, "lifted -> %s", nm);
+        }
+        return;
+    }
+    if (s_lifted && f.mask == 0) {
+        s_lifted = false;
+        legs_stop();
+        play_mot((esp_random() & 1) ? "react_put_down_1" : "react_put_down_2");
+        set_mode("idle");
+        s_need_cal = true; s_cal_at_us = now + 4000000;
+        s_explore_next_us = now + 4000000;
+        return;
+    }
+    if (f.mask) {
+        cliff_react(f.mask);
+        s_need_cal = true; s_cal_at_us = now + 6000000;
+    }
+}
 static void pet_tick(bool touched)
 {
     int64_t now = esp_timer_get_time();
@@ -131,7 +196,7 @@ static void idle_tick(void)
 // / easy to miss, especially while the feet are still on the charger contacts).
 static void explore_tick(void)
 {
-    if (!s_st.explore_enable || s_st.docked || s_petting) return;
+    if (!s_st.explore_enable || s_st.docked || s_petting || s_lifted) return;
     if (!k210_boot_done()) return;
     if (k210_link_state() == LINK_SPEAK) return;
     legs_status_t m; legs_get_status(&m);
@@ -224,6 +289,7 @@ static void dock_tick(void)
         } else {
             ESP_LOGI(TAG, "undocked: explore soon");
             s_explore_next_us = now + 1500000;
+            s_need_cal = true; s_cal_at_us = now + 4000000;
             s_limp_done = false;
             set_mode("idle");
         }
@@ -274,20 +340,7 @@ static void task(void *arg)
 
         dock_tick();
 
-        if (s_st.cliff_enable && s_st.foot_ok && !s_st.docked && !s_petting) {
-            foot_cliff_t f;
-            if (foot_cliff_poll(&f) == ESP_OK) {
-                portENTER_CRITICAL(&s_mux);
-                s_st.cliff_mask = f.mask;
-                memcpy(s_st.cliff_ch, f.ch, sizeof(s_st.cliff_ch));
-                portEXIT_CRITICAL(&s_mux);
-                if (f.mask) {
-                    legs_status_t m; legs_get_status(&m);
-                    if (m.playing) cliff_react(f.mask);
-                }
-            }
-        }
-
+        if (s_st.cliff_enable && s_st.foot_ok) cliff_tick();
         if (s_st.touch_ok) {
             touch_pet_t t;
             if (touch_pet_poll(&t) == ESP_OK) pet_tick(t.touched);
