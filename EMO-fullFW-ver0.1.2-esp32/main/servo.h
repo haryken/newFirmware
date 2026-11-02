@@ -18,6 +18,17 @@ float servo_pos(int i);
 uint32_t servo_pulse_us(int i);
 void  servo_power_on(void);
 void  servo_release(void);
+void  servo_rebind(void);
+
+// Board variant: 1 = old servo (supply GPIO21, left legs GPIO0),
+//                2 = new servo (supply GPIO0,  left legs GPIO21).
+// Auto-detected at boot; mode 0 auto / 1 old / 2 new is stored in NVS and
+// applied at the next boot.
+int   servo_board(void);
+const char *servo_board_name(void);
+int   servo_board_mode(void);
+int   servo_pwr_gpio(void);
+esp_err_t servo_set_board_mode(int mode);
 bool  servo_powered(void);
 int   servo_gpio(int i);
 

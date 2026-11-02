@@ -2,6 +2,7 @@
 #include "battery.h"
 #include "sdkconfig.h"
 #include <string.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -83,8 +84,18 @@ static void sample(void)
 static void bat_task(void *arg)
 {
     int n = 0;
+    int last_sense = -1;
     for (;;) {
         sample();
+        if ((int)s_bat.sense != last_sense) {        // GPIO36 = charger sense (stock power_object)
+            ESP_LOGW(TAG, "sense GPIO%d -> %d (%u mV, pin %u mV)", PIN_SENSE, s_bat.sense, s_bat.mv, s_bat.pin_mv);
+            last_sense = s_bat.sense;
+        }
+        static int last_mv = -1000;
+        if (abs((int)s_bat.mv - last_mv) >= 40) {
+            ESP_LOGI(TAG, "mv %u (pin %u, sense %d)", s_bat.mv, s_bat.pin_mv, s_bat.sense);
+            last_mv = s_bat.mv;
+        }
         if (n++ % 30 == 0)                       // once a minute
             ESP_LOGI(TAG, "%u mV (pin %u mV, raw %u, sense %d) tier %u %u%%%s",
                      s_bat.mv, s_bat.pin_mv, s_bat.raw, s_bat.sense, s_bat.tier,

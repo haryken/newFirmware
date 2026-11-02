@@ -243,10 +243,11 @@ static esp_err_t post_controls(httpd_req_t *r)
 static esp_err_t get_motion(httpd_req_t *r)
 {
     legs_status_t m; legs_get_status(&m);
-    char head[512];
+    char head[704];
     snprintf(head, sizeof(head),
         "{\"fs_ok\":%s,\"playing\":%s,\"loop\":%s,\"name\":\"%s\",\"media\":\"%s\",\"frame\":%u,\"frames\":%u,"
         "\"unsupported\":%u,\"pos\":[%u,%u,%u,%u],\"pulse_us\":[%u,%u,%u,%u],\"gpio\":[%d,%d,%d,%d],"
+        "\"board\":\"%s\",\"board_mode\":%d,\"pwr_gpio\":%d,"
         "\"rmt_cmd\":%u,\"powered\":%s,\"plays\":%u,\"files\":%u,"
         "\"ack_ok\":%d,\"ack_fail\":%d,\"diag\":\"%s\","
         "\"speed\":%.2f,\"speed_default\":%.2f,\"expected_ms\":%u,\"elapsed_ms\":%u,\"music_ms\":%u,"
@@ -257,6 +258,7 @@ static esp_err_t get_motion(httpd_req_t *r)
         (unsigned)servo_pulse_us(0), (unsigned)servo_pulse_us(1),
         (unsigned)servo_pulse_us(2), (unsigned)servo_pulse_us(3),
         servo_gpio(0), servo_gpio(1), servo_gpio(2), servo_gpio(3),
+        servo_board_name(), servo_board_mode(), servo_pwr_gpio(),
         (unsigned)servo_rmt_cmd(), m.powered?"true":"false", (unsigned)m.plays,
         (unsigned)m.files, servo_ack_ok(), servo_ack_fail(), servo_diag(),
         m.speed, m.speed_default, (unsigned)m.expected_ms, (unsigned)m.elapsed_ms, (unsigned)m.music_ms,
@@ -304,6 +306,13 @@ static esp_err_t post_motion(httpd_req_t *r)
         legs_stop();
     } else if (!strcmp(a, "release")) {
         legs_release();
+    } else if (!strcmp(a, "servo_board")) {
+        // {"action":"servo_board","mode":"auto|old|new"} — saved in NVS, applied at the next boot.
+        const cJSON *m = cJSON_GetObjectItemCaseSensitive(j, "mode");
+        const char *ms = cJSON_IsString(m) ? m->valuestring : "";
+        int mode = !strcmp(ms, "auto") ? 0 : !strcmp(ms, "old") ? 1 : !strcmp(ms, "new") ? 2 : -1;
+        if (mode < 0) { e = ESP_ERR_INVALID_ARG; err = "mode must be auto|old|new"; }
+        else e = servo_set_board_mode(mode);
     } else if (!strcmp(a, "rmt_cmd")) {
         const cJSON *c = cJSON_GetObjectItemCaseSensitive(j, "cmd");
         const cJSON *d = cJSON_GetObjectItemCaseSensitive(j, "data");

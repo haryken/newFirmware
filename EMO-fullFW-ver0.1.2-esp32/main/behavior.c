@@ -1,4 +1,4 @@
-// behavior.c — see behavior.h.
+﻿// behavior.c — see behavior.h.
 #include "behavior.h"
 #include "foot_cliff.h"
 #include "touch_pet.h"
@@ -7,6 +7,8 @@
 #include "k210_boot.h"
 #include "k210_link.h"
 #include "settings.h"
+#include "battery.h"
+#include "sdkconfig.h"
 #include <string.h>
 #include <stdlib.h>
 #include "esp_log.h"
@@ -57,11 +59,11 @@ static void play_mot(const char *name)
         play_face(name, true);           // face/mp3 only if .mot missing
 }
 
-static void hold_neutral(void)
+// On the charger the legs go limp (no PWM) so the robot can't push itself off.
+static void go_limp(void)
 {
     legs_stop();
-    const uint8_t p[4] = { 90, 90, 90, 90 };
-    legs_pose(p, 400);
+    legs_release();
 }
 
 static void cliff_react(uint8_t mask)
@@ -144,11 +146,15 @@ static void explore_tick(void)
     legs_gait_preset(turn, reverse, &g);
     g.cycles = 3.0f + (float)(r % 3);   // 3..5 periods — long enough to see
     g.neutral_after = true;
+    // Slower than the stock preset (stock T = 400..600 ms looked too fast on
+    // the desk): stretch the period, and boost the amplitude a bit less.
+    g.period_ms = (uint32_t)((uint64_t)g.period_ms * CONFIG_EMO_EXPLORE_PERIOD_PCT / 100);
+    if (g.period_ms > 5000) g.period_ms = 5000;
     for (int i = 0; i < 4; i++) {
-        int a = (int)g.A[i] * 2;         // ~2x stock amp so desk walk is obvious
-        if (a > 28) a = 28;
-        if (a < -28) a = -28;
-        if (a == 0) a = turn ? 14 : 18;
+        int a = (int)g.A[i] * CONFIG_EMO_EXPLORE_AMP_PCT / 100;
+        if (a > 24) a = 24;
+        if (a < -24) a = -24;
+        if (a == 0) a = turn ? 12 : 14;
         g.A[i] = (int8_t)a;
     }
 
@@ -166,34 +172,74 @@ static void explore_tick(void)
              turn, reverse, g.cycles, g.A[0], g.A[1], g.A[2], g.A[3]);
 }
 
+// Charger detect = GPIO36 "sense" (stock power_object input). Measured over
+// Wi-Fi with the USB cable unplugged: high while a charger is attached, low on
+// battery (battery reading also drops ~200 mV). Debounced.
+static bool s_charger, s_chg_raw, s_chg_init;
+static int64_t s_chg_change_us;
+static int64_t s_dock_since_us;
+static bool s_limp_done;
+
+static bool charger_present(void)
+{
+#if CONFIG_EMO_AUTO_DOCK
+    battery_t b; battery_get(&b);
+    if (!b.valid) return s_charger;
+    int64_t now = esp_timer_get_time();
+    if (!s_chg_init) {                       // first reading: no debounce
+        s_chg_init = true;
+        s_chg_raw = s_charger = b.sense;
+        s_chg_change_us = now;
+    }
+    if (b.sense != s_chg_raw) { s_chg_raw = b.sense; s_chg_change_us = now; }
+    if (s_chg_raw != s_charger && now - s_chg_change_us >= 2500000) {
+        s_charger = s_chg_raw;
+        ESP_LOGI(TAG, "charger %s", s_charger ? "connected" : "removed");
+    }
+#endif
+    return s_charger;
+}
+
 static void dock_tick(void)
 {
-    // GPIO36 "bat_sense" is a divider select on this board (often stuck high) —
-    // NOT a reliable charger detect. Dock is web/NVS checkbox only.
+    // docked = web/NVS checkbox OR charger attached.
     emo_settings_t st; settings_get_copy(&st);
-    bool dock = st.docked;
+    bool dock = st.docked || charger_present();
+    int64_t now = esp_timer_get_time();
     portENTER_CRITICAL(&s_mux);
     bool changed = s_st.docked != dock;
     s_st.docked = dock;
     portEXIT_CRITICAL(&s_mux);
     if (changed) {
         if (dock) {
-            ESP_LOGI(TAG, "docked: hold pose (stop explore)");
-            hold_neutral();
+            // Stand still in the waiting pose, go limp after DOCK_LIMP_MS.
+            ESP_LOGI(TAG, "docked: waiting pose, limp in %d s", CONFIG_EMO_DOCK_LIMP_S);
+            legs_stop();
+            const uint8_t p[4] = { 90, 90, 90, 90 };
+            legs_pose(p, 500);
+            s_dock_since_us = now;
+            s_limp_done = false;
             play_face("charge_get_in_new", true);
             set_mode("docked");
         } else {
-            ESP_LOGI(TAG, "undocked: big walk soon");
-            s_explore_next_us = esp_timer_get_time() + 400000;
+            ESP_LOGI(TAG, "undocked: explore soon");
+            s_explore_next_us = now + 1500000;
+            s_limp_done = false;
             set_mode("idle");
         }
     }
     if (!dock) return;
+    if (!s_limp_done && now - s_dock_since_us >= (int64_t)CONFIG_EMO_DOCK_LIMP_S * 1000000) {
+        ESP_LOGI(TAG, "docked %d s: legs limp", CONFIG_EMO_DOCK_LIMP_S);
+        go_limp();
+        s_limp_done = true;
+    }
     legs_status_t m; legs_get_status(&m);
     if (m.playing) {
         if (strstr(m.name, "explore") || strstr(m.name, "gait") || strstr(m.name, "walk") ||
             strstr(m.name, "foward") || strstr(m.name, "turn")) {
-            hold_neutral();
+            go_limp();
+            s_limp_done = true;
         }
     }
 }
@@ -296,7 +342,10 @@ void behavior_set_docked(bool on)
 bool behavior_docked(void)
 {
     emo_settings_t st; settings_get_copy(&st);
-    return st.docked;
+    portENTER_CRITICAL(&s_mux);
+    bool eff = s_st.docked;              // checkbox OR charger attached
+    portEXIT_CRITICAL(&s_mux);
+    return st.docked || eff;
 }
 
 void behavior_set_voice_busy(bool busy)

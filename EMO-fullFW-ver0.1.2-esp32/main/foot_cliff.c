@@ -2,6 +2,8 @@
 #include "foot_cliff.h"
 #include <string.h>
 #include "driver/i2c_master.h"
+#include "sdkconfig.h"
+#include "servo.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -44,6 +46,13 @@ static bool probe_ids(void)
 
 esp_err_t foot_cliff_start(void)
 {
+    // New-servo board: GPIO0 is the servo supply enable. Putting the I2C driver
+    // on it would toggle the supply, so leave the foot sensors alone.
+    if (servo_board() == 2) {
+        s_ok = false;
+        ESP_LOGW(TAG, "new-servo board: GPIO0 is the servo supply, foot I2C skipped, cliff disabled");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     i2c_master_bus_config_t bcfg = {
         .i2c_port = I2C_NUM_0,
         .sda_io_num = I2C_SDA,
@@ -66,9 +75,19 @@ esp_err_t foot_cliff_start(void)
     e = i2c_master_bus_add_device(s_bus, &dcfg, &s_dev_b);
     if (e != ESP_OK) return e;
 
-    s_ok = probe_ids();
-    if (!s_ok) ESP_LOGW(TAG, "no FOOT MCUs — cliff avoid disabled (IMU bus still up)");
-    return s_ok ? ESP_OK : ESP_ERR_NOT_FOUND;
+    bool found = probe_ids();
+    // GPIO0 is the foot-I2C SDA but also the left-legs PWM signal (old servo
+    // board). The stock firmware also loses the foot MCUs once the PWM owns the
+    // pin ("FOOT ID ... fail"). Give the pin back to the servo driver.
+    i2c_master_bus_rm_device(s_dev_a);
+    i2c_master_bus_rm_device(s_dev_b);
+    i2c_del_master_bus(s_bus);
+    s_bus = NULL;
+    servo_rebind();
+    s_ok = false;
+    ESP_LOGW(TAG, "foot MCUs %s; I2C released, GPIO0 returned to the servo driver, cliff disabled",
+             found ? "seen" : "not seen");
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 bool foot_cliff_available(void) { return s_ok; }

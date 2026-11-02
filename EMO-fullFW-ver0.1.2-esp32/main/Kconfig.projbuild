@@ -69,9 +69,12 @@ menu "EMO-Bridge configuration"
             empty session on the K210 (read-only). Turn off to skip them entirely.
 
     comment "Leg servos (GPIO_MAP.md): 50 Hz PWM, driven from /spiffs/mot/*.mot"
+    config EMO_SERVO_PWR_GPIO
+        int "Servo supply enable GPIO (stock 'old servo': LOW, init PWM, HIGH)"
+        default 21
     config EMO_SERVO_LL_GPIO
         int "Left legs servo GPIO (.mot byte 11)"
-        default 21
+        default 0
     config EMO_SERVO_RL_GPIO
         int "Right legs servo GPIO (.mot byte 12)"
         default 25
@@ -93,6 +96,35 @@ menu "EMO-Bridge configuration"
         help
             0 keeps PWM running like stock during/after moves (needed to see a
             twitch on the desk). >0 cuts PWM after idle to save current.
+
+    config EMO_AUTO_DOCK
+        bool "Detect the charger (GPIO36) and dock / undock automatically"
+        default y
+        help
+            Charger attached: stand in the waiting pose, then go limp. Removed:
+            start exploring. NOTE: a USB debug cable also charges the robot, so with
+            the cable plugged in the robot counts as docked.
+
+    config EMO_DOCK_LIMP_S
+        int "Seconds in the waiting pose after docking before the legs go limp"
+        default 10
+        range 1 120
+
+    config EMO_EXPLORE_PERIOD_PCT
+        int "Explore walk: gait period, percent of the stock preset (higher = slower)"
+        default 220
+        range 100 500
+        help
+            The stock walk preset has T = 400..600 ms, which looked far too fast on
+            the desk. 220 = about 0.9..1.3 s per step cycle.
+
+    config EMO_EXPLORE_AMP_PCT
+        int "Explore walk: step amplitude, percent of the stock preset"
+        default 150
+        range 100 300
+        help
+            100 = stock amplitude. The old firmware used 200 and could jump off the
+            charger / desk.
 
     config EMO_MOTION_SPEED_PCT
         int "Default motion speed, percent of the .mot file timing"
