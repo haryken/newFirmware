@@ -110,6 +110,11 @@ menu "EMO-Bridge configuration"
         default 10
         range 1 120
 
+    config EMO_DOCK_SLEEP_S
+        int "Seconds on the charger before the sleep face (0 = never sleep)"
+        default 40
+        range 0 3600
+
     config EMO_EXPLORE_PERIOD_PCT
         int "Explore walk: gait period, percent of the stock preset (higher = slower)"
         default 220

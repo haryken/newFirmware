@@ -109,3 +109,10 @@ Explore gait is slowed with `CONFIG_EMO_EXPLORE_PERIOD_PCT` (default 220, period
 x2.2) and `CONFIG_EMO_EXPLORE_AMP_PCT` (default 150, amplitude x1.5, clamped to +/-24 deg).
 Note: `sdkconfig` is not regenerated when building here, so add new `CONFIG_*`
 lines to it by hand.
+
+### Sleep face on the charger
+
+- Stock plays `charge_get_in_new` on docking and goes to the `sleep_*` clips within a minute.
+- Here: `CONFIG_EMO_DOCK_SLEEP_S` s docked (default 40, 0 = off) -> `sleep_get_in_slow`, then `sleep_loop_1` looping, changing clip every minute.
+- Touching the robot wakes it (`sleep_wake_up_fast`) and it sleeps again after another idle period; undocking wakes it too.
+- A voice conversation resets the timer.

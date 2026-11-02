@@ -1,4 +1,4 @@
-﻿// behavior.c — see behavior.h.
+// behavior.c — see behavior.h.
 #include "behavior.h"
 #include "foot_cliff.h"
 #include "touch_pet.h"
@@ -32,6 +32,7 @@ static int64_t s_explore_next_us;
 static bool s_petting;
 static int64_t s_pet_end_us;
 static volatile bool s_voice_busy;
+static volatile bool s_touch_wake;   // touch while docked: wake from sleep face
 
 static const char *IDLE_FACES[] = {
     "stay_wink_1", "stay_a_b", "stay_c_d", "look_around_1", "look_around_2",
@@ -149,7 +150,8 @@ static void cliff_tick(void)
 static void pet_tick(bool touched)
 {
     int64_t now = esp_timer_get_time();
-    if (!s_st.petting_enable || s_st.docked) return;
+    if (s_st.docked) { if (touched) s_touch_wake = true; return; }
+    if (!s_st.petting_enable) return;
     if (touched) {
         if (!s_petting) {
             s_petting = true;
@@ -244,6 +246,9 @@ static bool s_charger, s_chg_raw, s_chg_init;
 static int64_t s_chg_change_us;
 static int64_t s_dock_since_us;
 static bool s_limp_done;
+static bool s_sleeping;
+static int64_t s_sleep_next_us;
+static unsigned s_sleep_clip;
 
 static bool charger_present(void)
 {
@@ -284,10 +289,12 @@ static void dock_tick(void)
             legs_pose(p, 500);
             s_dock_since_us = now;
             s_limp_done = false;
+            s_sleeping = false;
             play_face("charge_get_in_new", true);
             set_mode("docked");
         } else {
             ESP_LOGI(TAG, "undocked: explore soon");
+            if (s_sleeping) { s_sleeping = false; play_face("sleep_wake_up_fast", false); }
             s_explore_next_us = now + 1500000;
             s_need_cal = true; s_cal_at_us = now + 4000000;
             s_limp_done = false;
@@ -300,6 +307,40 @@ static void dock_tick(void)
         go_limp();
         s_limp_done = true;
     }
+    // Sleep face after a while on the charger (stock: charge_get_in_new, then the sleep_* clips).
+#if CONFIG_EMO_DOCK_SLEEP_S > 0
+    {
+        static const char *const LOOPS[] = { "sleep_loop_1", "sleep_breath_1", "sleep_Fireflies_1", "sleep_loop_2", "sleep_breath_2", "sleep_Fireflies_2" };
+        bool busy = s_voice_busy || k210_link_state() == LINK_SPEAK;
+        if (busy) {
+            // a conversation owns the face: restart the idle timer, sleep again later
+            s_sleeping = false;
+            s_dock_since_us = now;
+            s_touch_wake = false;
+        } else if (s_touch_wake) {
+            s_touch_wake = false;
+            if (s_sleeping) {
+                ESP_LOGI(TAG, "touch: wake from sleep");
+                s_sleeping = false;
+                play_face("sleep_wake_up_fast", false);
+                set_mode("docked");
+            }
+            s_dock_since_us = now;   // sleep again after another idle period
+        } else if (!s_sleeping && now - s_dock_since_us >= (int64_t)CONFIG_EMO_DOCK_SLEEP_S * 1000000) {
+            ESP_LOGI(TAG, "docked %d s: sleep face", CONFIG_EMO_DOCK_SLEEP_S);
+            s_sleeping = true;
+            s_sleep_clip = 0;
+            play_face("sleep_get_in_slow", false);
+            s_sleep_next_us = now + 9000000;   // let the get-in clip finish, then loop
+            set_mode("sleeping");
+        } else if (s_sleeping && now >= s_sleep_next_us) {
+            const char *c = LOOPS[s_sleep_clip++ % (sizeof(LOOPS) / sizeof(LOOPS[0]))];
+            if (s_sleep_clip == 1) c = LOOPS[0];
+            video_play_face(c, 1, false, NULL);   // loop until replaced
+            s_sleep_next_us = now + 60000000;     // vary the clip every minute
+        }
+    }
+#endif
     legs_status_t m; legs_get_status(&m);
     if (m.playing) {
         if (strstr(m.name, "explore") || strstr(m.name, "gait") || strstr(m.name, "walk") ||
