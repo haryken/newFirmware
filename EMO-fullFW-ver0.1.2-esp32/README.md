@@ -40,7 +40,7 @@ they implement.
 
 ## Build & flash
 
-ESP-IDF **v6.0.x**, target `esp32`, WROVER-class module (PSRAM required; the
+ESP-IDF **v5.5.x** (or newer), target `esp32`, WROVER-class module (PSRAM required; the
 stock board has it). `sdkconfig.defaults` carries every non-default option.
 
 ```bash

@@ -33,6 +33,13 @@ void speaker_tone(unsigned hz, unsigned ms, int16_t amplitude);
 void     speaker_interrupt(const char *why);
 uint32_t speaker_serial(void);
 bool     speaker_ready(void);                 // ring allocated
+bool     speaker_busy(void);                  // MODE_SPK or audio still queued
+void     speaker_end_handoff(void);           // stop silence-feed after SPEAK→MIC
+
+// Fired (from link RX) when playback drains — keep the callback light.
+// Return true to take over the link (e.g. go MODE_MIC without IDLE).
+typedef bool (*speaker_idle_cb_t)(void);
+void speaker_set_idle_cb(speaker_idle_cb_t cb);
 
 // Link RX hooks (k210_link.c only).
 void speaker_on_spk_req(uint16_t len);        // 00: serve one block

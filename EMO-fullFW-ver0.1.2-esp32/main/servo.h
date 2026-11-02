@@ -1,11 +1,4 @@
-// servo.h — the four leg servos as PWM outputs.
-//
-// Pins (emo-libre/newFirmware Hardware/GPIO_MAP.md), 50 Hz, pulse 500 us (0 deg)
-// .. 2500 us (180 deg), i.e. the stock angle->pulse of FUN_4025a4b8:
-//   0 left legs   GPIO21      1 right legs  GPIO25
-//   2 left foot   GPIO5       3 right foot  GPIO26
-// The RMT "smart servo" packets on the same pins are the stock calibration /
-// firmware-update channel, not the motion path.
+// servo.h — RMT arm/position + LEDC PWM fallback.
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
@@ -17,15 +10,28 @@ extern "C" {
 
 #define SERVO_COUNT 4
 
-// LEDC timer + channels; holds 90 deg from boot when EMO_SERVO_HOLD_AT_BOOT.
 esp_err_t servo_init(void);
 
-void  servo_write(int i, float deg);      // 0..180, clamps; powers the output
-float servo_pos(int i);                   // last commanded angle
-void  servo_power_on(void);               // re-drive the last angles after a release
-void  servo_release(void);                // duty 0: servos go limp
+void  servo_write(int i, float deg);
+void  servo_flush(void);
+float servo_pos(int i);
+uint32_t servo_pulse_us(int i);
+void  servo_power_on(void);
+void  servo_release(void);
 bool  servo_powered(void);
 int   servo_gpio(int i);
+
+void  servo_bitbang_test(int deg, int ms);
+void  servo_rmt_poke(uint8_t cmd, uint16_t data);
+void  servo_pin_buzz(int ms);
+
+const char *servo_diag(void);
+int servo_ack_ok(void);
+int servo_ack_fail(void);
+
+void    servo_set_rmt_cmd(uint8_t cmd);
+uint8_t servo_rmt_cmd(void);
+void    servo_set_encode(int mode);
 
 #ifdef __cplusplus
 }

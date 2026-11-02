@@ -5,6 +5,7 @@
 #include "k210_boot.h"
 #include "microphone.h"
 #include "speaker.h"
+#include "behavior.h"
 #include "sdkconfig.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -59,6 +60,68 @@ void k210_link_reset_pulse(uint32_t low_ms)
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
+bool k210_link_ping(uint32_t timeout_ms)
+{
+    if (s_booting) return false;
+    s_ack_seen = false;
+    s_anim_done_seen = false;
+    // STOP_ANIM is answered with ANIM_DONE (55 AA 08), NOT the FE ACK that
+    // extended frames get. Waiting for FE here made a healthy K210 look dead
+    // and caused a pointless ~4 s RESETN (black screen) after every reply.
+    k210_uart_send_short(0x09, 0x00, 0x00, 0x00);
+    for (uint32_t t = 0; t < timeout_ms; t += 5) {
+        if (s_anim_done_seen || s_ack_seen) return true;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return s_anim_done_seen || s_ack_seen;
+}
+
+bool k210_link_recover_after_spk(void)
+{
+    if (s_booting) return false;
+
+    // Ping only — do NOT send MODE_IDLE here. IDLE right after MODE_SPK often
+    // kills UART ACKs and leaves wake/MIC dead until RESETN.
+    if (k210_link_ping(300)) {
+        ESP_LOGI(TAG, "post-spk: UART ok (state=%u)", (unsigned)s_state);
+        return true;
+    }
+
+    ESP_LOGW(TAG, "post-spk: UART dead after MODE_SPK — soft reset K210");
+    microphone_mark_closed();
+    s_state = LINK_IDLE;
+    s_booting = true;   // block mic/spk briefly
+    k210_link_clear_version();
+    k210_link_reset_pulse(1);
+    // Fast path: full boot uses 2 s + long VERSION poll; post-TTS must feel
+    // like a blink, not a reboot.
+    vTaskDelay(pdMS_TO_TICKS(700));
+    k210_uart_send_short(0x34, 0x00, 0x00, 0x00);   // boot gate
+
+    int64_t t0 = esp_timer_get_time();
+    while (!s_version_seen && esp_timer_get_time() - t0 < 4000000) {
+        k210_uart_send_short(0x69, 0x01, 0x00, 0x00);
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+    vTaskDelay(pdMS_TO_TICKS(150));
+
+    // Minimal stage so MIC / wake work (skip 6A/6C/74 — not required to listen).
+    static const uint8_t stage[][4] = {
+        { 0x70, 0x00, 0x00, 0x00 }, { 0x38, 0x01, 0x00, 0x00 },
+        { 0x06, 0x01, 0x00, 0x00 }, { 0x17, 0x68, 0x00, 0x00 },
+    };
+    for (size_t i = 0; i < sizeof(stage) / sizeof(stage[0]); i++) {
+        k210_uart_send_short(stage[i][0], stage[i][1], stage[i][2], stage[i][3]);
+        vTaskDelay(pdMS_TO_TICKS(40));
+    }
+    k210_uart_send_mode(K210_MODE_IDLE);
+    s_state = LINK_IDLE;
+    s_booting = false;
+    ESP_LOGI(TAG, "post-spk: K210 recovered fast (ver=%s)",
+             s_version[0] ? s_version : "?");
+    return s_version_seen;
+}
+
 void k210_link_power_off(void)
 {
     ESP_LOGW(TAG, "power off: power-enable GPIO%d -> LOW", PIN_PWR);
@@ -99,7 +162,10 @@ static void handle_short(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3)
     case 0x0D: break;                                     // mic level / direction, informational
     case 0x47: ESP_LOGI(TAG, "K210: ready"); break;
     case 0xFE: s_ack_seen = true; break;                  // ACK of an extended frame
-    case 0x3F: ESP_LOGI(TAG, "K210: yolo class=%u x=%u y=%u", p1, p2, p3); break;
+    case 0x3F:
+        ESP_LOGI(TAG, "K210: yolo class=%u x=%u y=%u", p1, p2, p3);
+        behavior_on_yolo(p1, p2, p3);
+        break;
     case 0x68: ESP_LOGW(TAG, "K210: error code %u", p1); break;
     default: break;
     }
@@ -236,7 +302,8 @@ esp_err_t k210_link_start(void)
     if ((e = k210_uart_init()) != ESP_OK) { ESP_LOGE(TAG, "uart: %s", esp_err_to_name(e)); return e; }
     if ((e = k210_spi_init()) != ESP_OK)  { ESP_LOGE(TAG, "spi: %s", esp_err_to_name(e)); return e; }
 
-    xTaskCreatePinnedToCore(rx_task, "k210_link", 6144, NULL, 12, NULL, 1);
+    // Mic callback + face JSON live here; keep headroom (was 6 KB — Opus overflow).
+    xTaskCreatePinnedToCore(rx_task, "k210_link", 10240, NULL, 12, NULL, 1);
     ESP_LOGI(TAG, "K210 link up: RST=%d, PWR=%d", PIN_RESET, PIN_PWR);
     return ESP_OK;
 }

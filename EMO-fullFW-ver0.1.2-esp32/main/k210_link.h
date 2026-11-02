@@ -50,6 +50,13 @@ const char *k210_link_version(void);          // "" until the K210 answered
 // RESETN pulse (active low), then 50 ms settle.
 void k210_link_reset_pulse(uint32_t low_ms);
 
+// After ESP MODE_SPK the K210 often stops ACKing UART / serving MIC_READY.
+// Ping; if dead, short RESETN + re-arm MODE_IDLE (wake word). ~2–4 s when reset needed.
+bool k210_link_recover_after_spk(void);
+
+// STOP_ANIM ping: true if the K210 ACKed within timeout_ms (UART alive).
+bool k210_link_ping(uint32_t timeout_ms);
+
 // Drop the power-enable pin: the whole robot (K210, ESP32, servos) switches
 // off, exactly like holding the button. Returns only while on the charger,
 // where the board may stay powered.

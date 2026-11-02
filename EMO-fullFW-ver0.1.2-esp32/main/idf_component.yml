@@ -1,3 +1,7 @@
 dependencies:
-  idf: ">=6.0"
+  # Project targets ESP-IDF 5.5.x (Espressif Windows installer). IDF 6 also OK.
+  idf: ">=5.5"
   espressif/cjson: "*"
+  espressif/esp_websocket_client: "^1.4.0"
+  # Same Opus C API as stock xiaozhi (opus.h); works on IDF 5.x registry.
+  78/esp-opus: "^1.0.5"

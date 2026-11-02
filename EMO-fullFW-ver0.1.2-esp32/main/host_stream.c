@@ -288,6 +288,18 @@ void host_stream_get_stats(host_stream_stats_t *out)
 void host_stream_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    load_host();
+
+    // Xiaozhi voice uses Opus/WS — don't burn 2 MB PSRAM on the EMOA backlog
+    // (TLS + Opus decode need that headroom on a 4 MB mapped SPIRAM map).
+    emo_settings_t st; settings_get_copy(&st);
+    if (st.voice_mode[0] && strcmp(st.voice_mode, "xiaozhi") == 0) {
+        s_cap = 0;
+        s_buf = NULL;
+        ESP_LOGI(TAG, "backlog skipped (voice_mode=xiaozhi)");
+        return;
+    }
+
     s_cap = BACKLOG_TRY;
     s_buf = heap_caps_malloc(s_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_buf) {
@@ -295,7 +307,6 @@ void host_stream_init(void)
         s_buf = malloc(s_cap);
     }
     if (!s_buf) { ESP_LOGE(TAG, "backlog alloc failed"); s_cap = 0; return; }
-    load_host();
     ESP_LOGI(TAG, "backlog %u KB, host %s:%u", (unsigned)(s_cap / 1024), s_host_ip, (unsigned)s_host_port);
     xTaskCreatePinnedToCore(sender_task, "host_tx", 5120, NULL, 9, NULL, 0);
 }

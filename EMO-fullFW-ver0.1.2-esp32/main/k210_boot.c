@@ -73,10 +73,14 @@ static void show_ip(void)
         if (esp_timer_get_time() - t0 > (int64_t)IP_WAIT_MS * 1000) { ip[0] = '\0'; break; }
         vTaskDelay(pdMS_TO_TICKS(250));
     }
-    char text[48];
-    snprintf(text, sizeof(text), ip[0] ? "EMO-Bridge\nIP %s" : "EMO-Bridge\nno Wi-Fi yet", ip);
+    int port = net_is_softap() ? 80 : 8080;
+    char text[56];
+    if (ip[0])
+        snprintf(text, sizeof(text), "EMO-Bridge\n%s:%d", ip, port);
+    else
+        snprintf(text, sizeof(text), "EMO-Bridge\nno Wi-Fi yet");
     bool ack = video_boot_text(text);
-    ESP_LOGI(TAG, "IP on screen: %s (%s)", ip[0] ? ip : "none", ack ? "ACK" : "no ACK");
+    ESP_LOGI(TAG, "IP on screen: %s:%d (%s)", ip[0] ? ip : "none", port, ack ? "ACK" : "no ACK");
 }
 
 static void boot_task(void *arg)

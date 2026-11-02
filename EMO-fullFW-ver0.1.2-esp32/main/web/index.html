@@ -14,6 +14,21 @@
 </header>
 <main>
 
+  <div class="card" id="wifi_card">
+    <h2>Wi-Fi</h2>
+    <small id="wifi_hint">Chọn mạng nhà bạn, nhập mật khẩu, rồi bấm Lưu. Robot sẽ khởi động lại và nối STA.</small>
+    <div class="btns" style="margin-top:10px">
+      <button type="button" id="wifi_scan">Quét mạng</button>
+      <span id="wifi_scan_st" class="pill"></span>
+    </div>
+    <div id="wifi_list" class="wifi-list"></div>
+    <div class="row" style="margin-top:12px">
+      <div><label>SSID</label><input id="wifi_ssid" placeholder="tên Wi-Fi" autocomplete="off"></div>
+      <div><label>Mật khẩu</label><input id="wifi_pass" type="password" placeholder="mật khẩu Wi-Fi" autocomplete="off"></div>
+    </div>
+    <div class="btns"><button type="button" id="wifi_save">Lưu &amp; kết nối</button><span id="wifi_saved" class="pill"></span></div>
+  </div>
+
   <div class="card">
     <h2>Status</h2>
     <div class="bat">
@@ -30,6 +45,23 @@
     <div class="btns">
       <button id="tone">Test tone on robot</button>
       <button id="micwav" class="ghost">Record 3 s on robot → WAV</button>
+    </div>
+  </div>
+
+  <div class="card" id="walk_card">
+    <h2>Walk test</h2>
+    <small>Nút test gait (stock explore_*). Tắt Docked trước. Nếu chân không nhúc → lỗi driver servo, không phải thiếu nút.</small>
+    <div class="walkpad">
+      <button type="button" class="ghost" id="walk_left">← Trái</button>
+      <button type="button" id="walk_fwd">↑ Tiến</button>
+      <button type="button" class="ghost" id="walk_right">Phải →</button>
+      <button type="button" class="ghost" id="walk_back">↓ Lùi</button>
+    </div>
+    <div class="btns">
+      <button type="button" id="walk_explore">Explore 20s</button>
+      <button type="button" class="ghost" id="walk_stop">Stop</button>
+      <button type="button" class="ghost" id="walk_wiggle">Wiggle servo</button>
+      <span id="walk_st" class="pill"></span>
     </div>
   </div>
 
@@ -67,22 +99,61 @@
     <div id="ctlres"></div>
   </div>
 
+  <div class="card" id="xz_card">
+    <h2>Xiaozhi pair</h2>
+    <small>1) Chọn Voice backend = Xiaozhi + Save. 2) Robot phải vào Wi‑Fi nhà (có internet). 3) Bấm <b>Lấy mã pair</b>. 4) Vào <a href="https://xiaozhi.me" target="_blank" rel="noopener">xiaozhi.me</a> → thêm thiết bị → nhập mã 6 số.</small>
+    <div class="xz-code" id="xz_code">————</div>
+    <div class="grid" style="margin-top:10px">
+      <b>Device-Id (MAC)</b><span id="xz_mac">—</span>
+      <b>Client-Id</b><span id="xz_client" style="word-break:break-all">—</span>
+      <b>Trạng thái</b><span id="xz_st">—</span>
+    </div>
+    <div class="btns">
+      <button type="button" id="xz_pair">Lấy mã pair</button>
+      <button type="button" class="ghost" id="xz_copy">Copy mã</button>
+      <button type="button" class="ghost" id="xz_dismiss">Đã pair — ẩn mã trên mặt</button>
+      <span id="xz_msg" class="pill"></span>
+    </div>
+  </div>
+
   <div class="card">
     <h2>Configuration</h2>
     <div class="row">
-      <div><label>Wi-Fi SSID</label><input id="wifi_ssid"></div>
-      <div><label>Wi-Fi password</label><input id="wifi_pass" type="password" placeholder="(unchanged)"></div>
+      <div><label>Voice backend</label>
+        <select id="voice_mode">
+          <option value="emoa">EMOA (local-brain TCP)</option>
+          <option value="xiaozhi">Xiaozhi (OTA + WebSocket)</option>
+        </select>
+      </div>
+      <div><label>Default motion speed, % of file timing</label><input id="motion_speed" placeholder="100"></div>
     </div>
     <div class="row">
-      <div><label>Voice server IP (where each utterance is streamed)</label><input id="host_ip" placeholder="192.168.137.1"></div>
-      <div><label>Voice server port</label><input id="host_port" placeholder="7007"></div>
+      <div><label>EMOA server IP</label><input id="host_ip" placeholder="192.168.137.1"></div>
+      <div><label>EMOA port</label><input id="host_port" placeholder="7007"></div>
     </div>
     <div class="row">
-      <div><label>Default motion speed, % of the file timing (100 = as authored, matches the dance songs)</label><input id="motion_speed" placeholder="100"></div>
+      <div><label>Xiaozhi OTA URL</label><input id="ota_url" placeholder="https://api.tenclass.net/xiaozhi/ota/"></div>
+      <div><label>Xiaozhi WS URL (optional override)</label><input id="ws_url" placeholder="ws://192.168.x.x:8000/xiaozhi/v1/"></div>
+    </div>
+    <div class="row">
+      <div><label>Xiaozhi token (optional)</label><input id="xz_token" type="password" placeholder="(unchanged)"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="docked" style="width:auto"> Docked / stand still (no explore). Uncheck to walk.</label></div>
+      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="explore_enable" checked style="width:auto"> Auto explore when not docked — put on flat floor, feet free of charger</label></div>
+    </div>
+    <div class="row">
+      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="idle_faces" checked style="width:auto"> Idle face blink / stay_*</label></div>
+      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="cliff_enable" checked style="width:auto"> Cliff interrupt while walking</label></div>
+    </div>
+    <div class="row">
+      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="petting_enable" checked style="width:auto"> Head petting (touch pads)</label></div>
+      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="yolo_react" checked style="width:auto"> YOLO → see_EMO face</label></div>
     </div>
     <div class="btns"><button id="save">Save</button><span id="saved" class="pill"></span></div>
-    <small>Wi-Fi changes apply at the next boot; the voice server address applies at the next utterance.
-    Server → robot playback: <code>POST http://&lt;robot-ip&gt;/api/play_pcm</code> with raw 48 kHz mono int16 LE.</small>
+    <small>Open this page at <code>http://&lt;robot-ip&gt;:8080</code> (shown on the face at boot).
+    Wi-Fi changes apply at the next boot; behaviour toggles apply immediately after Save.
+    Server → robot playback: <code>POST http://&lt;robot-ip&gt;:8080/api/play_pcm</code>.</small>
   </div>
 
   <div class="card">

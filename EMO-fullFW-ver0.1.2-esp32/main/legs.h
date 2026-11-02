@@ -97,7 +97,9 @@ esp_err_t legs_gait(const legs_gait_t *g);
 void legs_stop(void);
 
 // Move the four servos to deg[4] over ms milliseconds (blocking, max 10 s).
+// hold=true: keep PWM after the move (no idle release) — for desk twitch tests.
 esp_err_t legs_pose(const uint8_t deg[4], uint32_t ms);
+esp_err_t legs_pose_hold(const uint8_t deg[4], uint32_t ms, bool hold);
 
 // Stop the PWM: servos go limp (stock "stop_all"). Any move powers them again.
 void legs_release(void);

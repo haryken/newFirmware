@@ -83,19 +83,16 @@ menu "EMO-Bridge configuration"
         default 26
     config EMO_SERVO_HOLD_AT_BOOT
         bool "Drive the servos to 90 deg at boot, as the stock firmware does"
-        default n
+        default y
         help
-            Off: the servos stay unpowered until the first motion. On: they are
-            driven to the neutral pose at boot (and released after EMO_SERVO_IDLE_MS
-            like any other move).
+            Stock FUN_40262f7c always starts MCPWM at neutral 90. Off: PWM stays
+            cut until the first motion.
     config EMO_SERVO_IDLE_MS
         int "Release the servos (cut the PWM) this long after the last move, ms (0 = never)"
-        default 1500
+        default 0
         help
-            A servo holding its position draws current the whole time; the robot
-            stands fine with the legs limp. After a motion, gait or pose ends the
-            PWM is cut once the legs have been still for this long. The next move
-            powers them again.
+            0 keeps PWM running like stock during/after moves (needed to see a
+            twitch on the desk). >0 cuts PWM after idle to save current.
 
     config EMO_MOTION_SPEED_PCT
         int "Default motion speed, percent of the .mot file timing"
@@ -143,6 +140,6 @@ menu "EMO-Bridge configuration"
         default "emo-bridge"
     config EMO_AP_PASS
         string "Fallback SoftAP password (>=8 chars, blank = open)"
-        default "emobridge"
+        default ""
 
 endmenu

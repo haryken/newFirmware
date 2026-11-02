@@ -17,9 +17,23 @@ typedef struct {
     // menuconfig EMO_HOST_IP / EMO_HOST_PORT; applied at the next utterance.
     char     host_ip[16];
     uint16_t host_port;
+    // Voice backend: "emoa" (TCP local-brain) or "xiaozhi" (OTA + WebSocket + Opus).
+    char voice_mode[16];
+    // Xiaozhi: OTA check URL (e.g. http://host:8003/xiaozhi/ota/) and optional
+    // websocket URL / token overrides (if ws_url set, OTA is only used for activation).
+    char ota_url[160];
+    char ws_url[160];
+    char xz_token[96];
     // Default motion speed, percent of the file timing (100 = as authored; applies
     // to every play without an explicit speed). menuconfig EMO_MOTION_SPEED_PCT.
     uint16_t motion_speed_pct;
+    // Behaviour (safe defaults on; docked = stand still on charger / no explore walk)
+    bool docked;
+    bool idle_faces;
+    bool cliff_enable;
+    bool petting_enable;
+    bool yolo_react;
+    bool explore_enable;   // auto wander when not docked (lively desk robot)
 } emo_settings_t;
 
 // Load from NVS into *out, filling defaults for any missing key. Never fails hard.

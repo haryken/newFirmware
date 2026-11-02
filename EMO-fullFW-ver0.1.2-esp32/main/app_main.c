@@ -1,6 +1,6 @@
 // app_main.c — brings the modules up and wires their callbacks. No logic here.
 //
-//   mic path   K210 --SPI--> microphone -> host_stream (TCP to the voice server)
+//   mic path   K210 --SPI--> microphone -> host_stream (EMOA) or xiaozhi (WS+Opus)
 //                                        -> rest_api mic.wav tap
 //   play path  rest_api /api/play_pcm, /api/tone -> speaker --SPI--> K210
 //   legs       legs (.mot player, gait) -> servo PWM; paired faces -> video
@@ -14,35 +14,39 @@
 #include "speaker.h"
 #include "video.h"
 #include "host_stream.h"
+#include "xiaozhi_client.h"
 #include "http_server.h"
 #include "battery.h"
 #include "servo.h"
 #include "legs.h"
+#include "behavior.h"
+#include "tricks.h"
 #include "nvs_flash.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "app";
 
-// Mic PCM from the K210 (16 kHz mono int16). Reaches the host only during an
-// utterance (host_stream gates on the session), the web meter/WAV always.
 static void mic_sink(const int16_t *pcm, size_t samples)
 {
-    host_stream_feed(pcm, samples);
+    if (xiaozhi_enabled()) xiaozhi_feed(pcm, samples);
+    else host_stream_feed(pcm, samples);
 }
 
-// Wake word -> open a connection to the host and stream; end of speech -> flush
-// and close. One TCP connection per utterance.
 static void on_mic_event(microphone_event_t ev)
 {
+    if (xiaozhi_enabled()) {
+        if (ev == MIC_EV_WAKE) xiaozhi_session_begin();
+        else xiaozhi_session_end();
+        return;
+    }
     if (ev == MIC_EV_WAKE) host_stream_session_begin();
     else host_stream_session_end();
 }
 
-// A motion starts: show its face animation (+ music) on the K210, as the stock
-// behaviour engine does for every profile.json animation (mot + media).
 static void on_motion_media(const char *name, bool with_mp3)
 {
     bool ack = false;
@@ -52,6 +56,9 @@ static void on_motion_media(const char *name, bool with_mp3)
 
 void app_main(void)
 {
+    esp_reset_reason_t rr = esp_reset_reason();
+    ESP_LOGW(TAG, "reset_reason=%d", (int)rr);
+
     esp_err_t nv = nvs_flash_init();
     if (nv == ESP_ERR_NVS_NO_FREE_PAGES || nv == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
@@ -60,12 +67,14 @@ void app_main(void)
     settings_init();
 
     host_stream_init();
+    xiaozhi_init();
     battery_start();
     servo_init();
     legs_set_media_cb(on_motion_media);
     legs_init();
-    net_start();                       // Wi-Fi STA (+AP fallback)
-    http_server_start();               // web page + REST API
+    net_start();                       // Wi-Fi STA (+ SoftAP if no SSID)
+    http_server_start();               // web page + REST API :8080
+    xiaozhi_start();                   // OTA/WS when voice_mode=xiaozhi
 
     // K210: mic/speaker modules first (the link RX task calls into them), then
     // the link, then the boot sequence. Wi-Fi + web stay up if the link can't start.
@@ -74,11 +83,13 @@ void app_main(void)
     speaker_init();
     esp_err_t kerr = k210_link_start();
     if (kerr == ESP_OK) {
-        k210_boot_start();             // shows the IP, resets the K210, then the first face
+        k210_boot_start();             // shows IP:8080, resets the K210, then the first face
     } else {
         ESP_LOGE(TAG, "K210 link not started: %s", esp_err_to_name(kerr));
     }
-    ESP_LOGI(TAG, "EMO-Bridge up. Wake-word utterances stream to the voice server.");
+    tricks_init();
+    behavior_start();                  // idle faces, cliff interrupt, petting, dock hold
+    ESP_LOGI(TAG, "EMO-Bridge up. Web http://<ip>:8080 — voice_mode emoa|xiaozhi.");
 
     for (;;) {                         // heartbeat
         vTaskDelay(pdMS_TO_TICKS(10000));

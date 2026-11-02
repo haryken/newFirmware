@@ -59,8 +59,13 @@ static void tick_sleep(uint32_t ms)
 {
     s_deadline_us += (int64_t)ms * 1000;
     int64_t wait = s_deadline_us - esp_timer_get_time();
-    if (wait > 0) vTaskDelay(pdMS_TO_TICKS((wait + 999) / 1000));
-    else if (wait < -200000) s_deadline_us = esp_timer_get_time();   // way behind (stalled): resync
+    if (wait > 0) {
+        vTaskDelay(pdMS_TO_TICKS((wait + 999) / 1000));
+    } else {
+        // Behind schedule (LEDC can burn CPU): still yield so IDLE feeds the WDT.
+        if (wait < -200000) s_deadline_us = esp_timer_get_time();
+        taskYIELD();
+    }
 }
 
 void legs_set_media_cb(legs_media_cb_t cb) { s_media_cb = cb; }
@@ -106,6 +111,7 @@ static bool move_to(const uint8_t tgt[4], uint32_t ms)
     int steps = ms / TICK_MS;
     if (steps < 1) {
         for (int i = 0; i < 4; i++) servo_write(i, tgt[i]);
+        servo_flush();
         publish_pos();
         if (ms) tick_sleep(ms);
         return !s_stop;
@@ -115,6 +121,7 @@ static bool move_to(const uint8_t tgt[4], uint32_t ms)
     for (int k = 1; k <= steps; k++) {
         if (s_stop) return false;
         for (int i = 0; i < 4; i++) servo_write(i, k == steps ? tgt[i] : start[i] + inc[i] * k);
+        servo_flush();
         publish_pos();
         tick_sleep(TICK_MS);
     }
@@ -158,6 +165,7 @@ static bool run_gait(const legs_gait_t *g)
             servo_write(i, 90.0f + pos);
             phase[i] += inc;
         }
+        servo_flush();
         publish_pos();
         tick_sleep(SAMPLE_MS);
     }
@@ -415,7 +423,7 @@ void legs_stop(void)
     xSemaphoreGive(s_api);
 }
 
-esp_err_t legs_pose(const uint8_t deg[4], uint32_t ms)
+esp_err_t legs_pose_hold(const uint8_t deg[4], uint32_t ms, bool hold)
 {
     for (int i = 0; i < 4; i++) if (deg[i] > 180) return ESP_ERR_INVALID_ARG;
     if (ms > MAX_POSE_MS) ms = MAX_POSE_MS;
@@ -424,9 +432,18 @@ esp_err_t legs_pose(const uint8_t deg[4], uint32_t ms)
     cancel_idle_release();
     s_deadline_us = esp_timer_get_time();
     move_to(deg, ms);
-    arm_idle_release();
+    ESP_LOGI(TAG, "pose [%u %u %u %u] pulse=[%u %u %u %u]µs hold=%d",
+             deg[0], deg[1], deg[2], deg[3],
+             (unsigned)servo_pulse_us(0), (unsigned)servo_pulse_us(1),
+             (unsigned)servo_pulse_us(2), (unsigned)servo_pulse_us(3), (int)hold);
+    if (!hold) arm_idle_release();
     xSemaphoreGive(s_api);
     return ESP_OK;
+}
+
+esp_err_t legs_pose(const uint8_t deg[4], uint32_t ms)
+{
+    return legs_pose_hold(deg, ms, false);
 }
 
 esp_err_t legs_gait(const legs_gait_t *g)

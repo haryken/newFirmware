@@ -35,6 +35,13 @@ void microphone_set_event_cb(microphone_event_cb_t cb);
 // by the web WAV capture and the "mode_mic" control. Fails while booting or speaking.
 esp_err_t microphone_open(void);
 
+// After TTS: settle IDLE then 4B + MODE_MIC, start an utterance session.
+esp_err_t microphone_open_followup(void);
+
+// While now < grace, K210 END_OF_SPEECH re-opens MODE_MIC instead of ending
+// the utterance (gives the user time after a slow post-TTS K210 recover).
+void microphone_set_listen_grace_ms(uint32_t ms);
+
 // Called by speaker.c when it takes the link: the mic is closed by MODE_SPK.
 void microphone_mark_closed(void);
 

@@ -19,11 +19,11 @@ static const char *TAG = "mic";
 #define MIC_REQ_MAX     8192
 
 // Utterance window tuning (see microphone.h).
-#define VOICE_PEAK      3000            // |sample| above this counts as voice (room noise ~500-2000)
+#define VOICE_PEAK      2600            // |sample| above this counts as voice (room noise ~500-2000)
 #define HANGOVER_US     1500000         // voice this recent at a K210 cut -> extend the window
 #define END_SILENCE_US  1000000         // quiet this long in an extended window -> end of turn
 #define SESSION_MAX_US  15000000
-#define MIC_STALL_US    2500000         // in a session, no MIC_READY for this long -> give up
+#define MIC_STALL_US    6000000         // post-TTS MIC_READY can lag
 
 static microphone_cb_t s_cb;
 static microphone_event_cb_t s_event_cb;
@@ -34,12 +34,31 @@ static volatile bool s_reopen_wake;     // open as a wake turn (face anim, no 4B
 static volatile bool s_in_session;
 static bool s_sess_extended;            // at least one follow-up window opened
 static int64_t s_sess_start_us, s_last_voice_us, s_last_mic_us;
+static int64_t s_grace_until_us;        // END_OF_SPEECH extends listen until this
+static volatile bool s_heard_voice;     // real speech seen in this utterance (ends grace)
+static volatile int s_win_peak;         // loudest sample since the last utterance end (debug)
 
 static WORD_ALIGNED_ATTR uint8_t s_buf[MIC_REQ_MAX + 64];   // DMA scratch, internal RAM
 
 void microphone_init(microphone_cb_t cb) { s_cb = cb; }
 void microphone_set_event_cb(microphone_event_cb_t cb) { s_event_cb = cb; }
-void microphone_mark_closed(void) { s_st.open = false; }
+void microphone_mark_closed(void)
+{
+    // Speaker took the link — drop the utterance quietly (no END_OF_SPEECH).
+    // Otherwise after MODE_SPK drains, the mic watchdog fires "no mic data"
+    // and Xiaozhi follow-up gets an immediate listen-stop.
+    s_st.open = false;
+    s_in_session = false;
+    s_reopen_at = 0;
+    s_grace_until_us = 0;
+    s_heard_voice = false;
+}
+
+void microphone_set_listen_grace_ms(uint32_t ms)
+{
+    s_grace_until_us = ms ? (esp_timer_get_time() + (int64_t)ms * 1000) : 0;
+    s_heard_voice = false;
+}
 
 void microphone_get_stats(microphone_stats_t *out)
 {
@@ -76,7 +95,37 @@ static void start_listen(bool wake)
 esp_err_t microphone_open(void)
 {
     if (k210_link_booting() || k210_link_state() == LINK_SPEAK) return ESP_ERR_INVALID_STATE;
+    // Treat as a real utterance so END_OF_SPEECH / silence end the turn
+    // (needed for Xiaozhi follow-up after TTS — not just web WAV capture).
+    s_in_session = true;
+    s_sess_extended = false;
+    s_sess_start_us = s_last_voice_us = esp_timer_get_time();
+    s_last_mic_us = s_sess_start_us;
     start_listen(false);
+    return ESP_OK;
+}
+
+esp_err_t microphone_open_followup(void)
+{
+    if (k210_link_booting()) return ESP_ERR_INVALID_STATE;
+
+    // Prefer SPEAK→MIC (no IDLE). If already idle, poke MIC (+ 4B like mid-turn).
+    bool from_spk = (k210_link_state() == LINK_SPEAK);
+    if (from_spk) {
+        k210_uart_send_mode(K210_MODE_MIC);
+    } else {
+        k210_uart_send_short(0x4B, 0x00, 0x00, 0x00);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        k210_uart_send_mode(K210_MODE_MIC);
+    }
+    k210_link_set_state(LINK_LISTEN);
+    speaker_end_handoff();
+
+    s_in_session = true;
+    s_sess_extended = false;
+    s_st.open = true;
+    s_sess_start_us = s_last_voice_us = s_last_mic_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "follow-up MODE_MIC armed (from %s)", from_spk ? "spk" : "idle");
     return ESP_OK;
 }
 
@@ -88,8 +137,10 @@ static void end_session(const char *why)
         k210_uart_send_mode(K210_MODE_IDLE);
         k210_link_set_state(LINK_IDLE);
     }
-    ESP_LOGI(TAG, "utterance over (%s, %.1f s) -> MODE_IDLE", why,
-             (esp_timer_get_time() - s_sess_start_us) / 1e6);
+    ESP_LOGI(TAG, "utterance over (%s, %.1f s, heard_voice=%d maxpeak=%d) -> MODE_IDLE", why,
+             (esp_timer_get_time() - s_sess_start_us) / 1e6, (int)s_heard_voice, (int)s_win_peak);
+    s_win_peak = 0;
+    s_heard_voice = false;
     if (s_event_cb) s_event_cb(MIC_EV_END_OF_SPEECH);
 }
 
@@ -114,15 +165,20 @@ void microphone_on_mic_ready(uint16_t val)
     s_st.samples += samples;
     s_st.open = true;
     s_last_mic_us = esp_timer_get_time();
+    if (s_in_session && (s_st.samples % 16000) < samples)
+        ESP_LOGI(TAG, "mic streaming peak=%d samples=%u", peak, (unsigned)s_st.samples);
     if (s_cb) s_cb(pcm, samples);
 
     if (s_in_session) {
         int64_t now = esp_timer_get_time();
-        if (peak > VOICE_PEAK) s_last_voice_us = now;
+        if (peak > s_win_peak) s_win_peak = peak;
+        if (peak > VOICE_PEAK) { s_last_voice_us = now; s_heard_voice = true; }
+        bool grace = s_grace_until_us && now < s_grace_until_us;
         if (now - s_sess_start_us > SESSION_MAX_US)
             end_session("max length");
-        else if (s_sess_extended && now - s_last_voice_us > END_SILENCE_US)
-            end_session("silence");
+        else if (s_sess_extended && (s_heard_voice || !grace) &&
+                 now - s_last_voice_us > END_SILENCE_US)
+            end_session("silence");     // user spoke, then paused -> send to server now
     }
 }
 
@@ -158,12 +214,20 @@ void microphone_on_voice_event(uint8_t p1, uint8_t p2)
         return;
     }
     int64_t now = esp_timer_get_time();
-    if (now - s_sess_start_us < SESSION_MAX_US && now - s_last_voice_us < HANGOVER_US) {
+    if (!s_heard_voice && s_grace_until_us && now < s_grace_until_us) {
+        s_sess_extended = true;
+        s_last_voice_us = now;
+        s_sess_start_us = now;   // don't hit SESSION_MAX mid-grace
+        ESP_LOGI(TAG, "K210 cut during listen grace -> re-open MIC");
+        schedule_open(20, false);
+    } else if (now - s_sess_start_us < SESSION_MAX_US && now - s_last_voice_us < HANGOVER_US) {
         // Voice was heard moments ago: the K210 cut on a pause. Keep listening.
         s_sess_extended = true;
         ESP_LOGI(TAG, "K210 cut after a pause -> extending the listen window");
         schedule_open(20, false);                        // follow-up window (4B + MODE_MIC)
     } else {
+        s_grace_until_us = 0;
+        s_heard_voice = false;
         end_session("K210 end of speech");
     }
 }

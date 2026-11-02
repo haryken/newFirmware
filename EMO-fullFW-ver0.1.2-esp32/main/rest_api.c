@@ -7,13 +7,18 @@
 #include "microphone.h"
 #include "speaker.h"
 #include "host_stream.h"
+#include "xiaozhi_client.h"
 #include "battery.h"
+#include "behavior.h"
+#include "tricks.h"
 #include "legs.h"
+#include "servo.h"
 #include <string.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "cJSON.h"
 
@@ -58,17 +63,23 @@ static esp_err_t post_config(httpd_req_t *r)
     free(body);
     if (!j) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json"); return ESP_FAIL; }
 
-    emo_settings_t st; settings_get_copy(&st);
+    emo_settings_t before; settings_get_copy(&before);
+    emo_settings_t st = before;
     cJSON *kv;
     const char *bad = NULL;
+    bool wifi_changed = false;
     cJSON_ArrayForEach(kv, j) {
         int rc = -1;
         if (cJSON_IsString(kv)) rc = settings_set_kv(&st, kv->string, kv->valuestring);
         else if (cJSON_IsNumber(kv)) {
             char num[16]; snprintf(num, sizeof(num), "%d", kv->valueint);
             rc = settings_set_kv(&st, kv->string, num);
+        } else if (cJSON_IsBool(kv)) {
+            rc = settings_set_kv(&st, kv->string, cJSON_IsTrue(kv) ? "true" : "false");
         }
         if (rc != 0 && !bad) bad = kv->string;
+        if (kv->string && (!strcmp(kv->string, "wifi_ssid") || !strcmp(kv->string, "wifi_pass")))
+            wifi_changed = true;
     }
     httpd_resp_set_type(r, "application/json");
     if (bad) {
@@ -82,8 +93,29 @@ static esp_err_t post_config(httpd_req_t *r)
     cJSON_Delete(j);
     int rc = settings_save(&st);
     if (rc == 0) legs_set_default_speed(st.motion_speed_pct / 100.0f);   // applies to the next play
-    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"nvs write failed\"}");
+    if (rc != 0) {
+        httpd_resp_sendstr(r, "{\"ok\":false,\"error\":\"nvs write failed\"}");
+        return ESP_OK;
+    }
+    if (wifi_changed && st.wifi_ssid[0]) {
+        httpd_resp_sendstr(r, "{\"ok\":true,\"reboot\":true}");
+        vTaskDelay(pdMS_TO_TICKS(400));
+        esp_restart();
+    }
+    httpd_resp_sendstr(r, "{\"ok\":true}");
     return ESP_OK;
+}
+
+// ---- /api/wifi/scan ----
+// Non-blocking: returns {"scanning":true} while a background scan runs, else AP list.
+static esp_err_t get_wifi_scan(httpd_req_t *r)
+{
+    char *json = net_wifi_scan_json();
+    httpd_resp_set_type(r, "application/json");
+    if (!json) return httpd_resp_sendstr(r, "[]");
+    esp_err_t e = httpd_resp_sendstr(r, json);
+    free(json);
+    return e;
 }
 
 // ---- /api/status ----
@@ -91,22 +123,42 @@ static esp_err_t get_status(httpd_req_t *r)
 {
     k210_stats_t k; k210_get_stats(&k);
     host_stream_stats_t a; host_stream_get_stats(&a);
+    xiaozhi_stats_t xz; xiaozhi_get_stats(&xz);
+    emo_settings_t st; settings_get_copy(&st);
     battery_t b; battery_get(&b);
+    behavior_status_t bh; behavior_get_status(&bh);
     char ip[16]; net_get_ip(ip, sizeof(ip));
-    char buf[640];
+    bool xz_mode = xz.enabled;
+    bool session = xz_mode ? xz.session : a.session;
+    unsigned sessions = xz_mode ? xz.sessions : a.sessions;
+    bool host_up = xz_mode ? xz.connected : a.connected;
+    char buf[1600];
     snprintf(buf, sizeof(buf),
-        "{\"ip\":\"%s\",\"linked\":%s,\"state\":%u,\"version\":\"%s\",\"boot_done\":%s,"
+        "{\"ip\":\"%s\",\"http_port\":%u,\"linked\":%s,\"state\":%u,\"version\":\"%s\",\"boot_done\":%s,"
         "\"mic_open\":%s,\"mic_peak\":%u,\"mic_samples\":%u,\"play_queued\":%u,"
-        "\"host_connected\":%s,\"fed\":%llu,\"acked\":%llu,\"backlog\":%u,"
+        "\"voice_mode\":\"%s\",\"host_connected\":%s,\"fed\":%llu,\"acked\":%llu,\"backlog\":%u,"
         "\"overflow\":%u,\"reconnects\":%u,\"wake_events\":%u,\"session\":%s,\"sessions\":%u,"
-        "\"bat_valid\":%s,\"bat_mv\":%u,\"bat_pct\":%u,\"bat_tier\":%u,\"bat_sense\":%s,\"bat_low\":%s}",
-        ip, k.linked?"true":"false", (unsigned)k.state, k.version, k.boot_done?"true":"false",
+        "\"xz_ready\":%s,\"xz_speaking\":%s,\"xz_listening\":%s,\"xz_activation\":\"%s\","
+        "\"xz_device_id\":\"%s\",\"xz_client_id\":\"%s\",\"xz_ws_url\":\"%s\","
+        "\"xz_opus_sent\":%u,\"xz_opus_recv\":%u,\"wifi_connected\":%s,"
+        "\"bat_valid\":%s,\"bat_mv\":%u,\"bat_pct\":%u,\"bat_tier\":%u,\"bat_sense\":%s,\"bat_low\":%s,"
+        "\"beh_mode\":\"%s\",\"docked\":%s,\"foot_ok\":%s,\"touch_ok\":%s,\"cliff_mask\":%u,"
+        "\"cliff\":[%u,%u,%u,%u],\"petting\":%s}",
+        ip, (unsigned)(net_is_softap() ? 80 : 8080),
+        k.linked?"true":"false", (unsigned)k.state, k.version, k.boot_done?"true":"false",
         k.mic_open?"true":"false", (unsigned)k.mic_peak, (unsigned)k.mic_samples,
-        (unsigned)k.play_queued, a.connected?"true":"false", (unsigned long long)a.fed,
-        (unsigned long long)a.acked, (unsigned)a.backlog, (unsigned)a.overflow,
-        (unsigned)a.reconnects, (unsigned)k.wake_events, a.session?"true":"false",
-        (unsigned)a.sessions, b.valid?"true":"false", (unsigned)b.mv, (unsigned)b.percent,
-        (unsigned)b.tier, b.sense?"true":"false", b.low?"true":"false");
+        (unsigned)k.play_queued, st.voice_mode, host_up?"true":"false",
+        (unsigned long long)a.fed, (unsigned long long)a.acked, (unsigned)a.backlog,
+        (unsigned)a.overflow, (unsigned)a.reconnects, (unsigned)k.wake_events,
+        session?"true":"false", sessions,
+        xz.ready?"true":"false", xz.speaking?"true":"false", xz.listening?"true":"false",
+        xz.activation, xz.device_id, xz.client_id, xz.ws_url,
+        (unsigned)xz.opus_sent, (unsigned)xz.opus_recv, net_is_connected()?"true":"false",
+        b.valid?"true":"false", (unsigned)b.mv, (unsigned)b.percent,
+        (unsigned)b.tier, b.sense?"true":"false", b.low?"true":"false",
+        bh.mode, bh.docked?"true":"false", bh.foot_ok?"true":"false", bh.touch_ok?"true":"false",
+        (unsigned)bh.cliff_mask, (unsigned)bh.cliff_ch[0], (unsigned)bh.cliff_ch[1],
+        (unsigned)bh.cliff_ch[2], (unsigned)bh.cliff_ch[3], bh.petting?"true":"false");
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, buf);
 }
@@ -194,13 +246,20 @@ static esp_err_t get_motion(httpd_req_t *r)
     char head[512];
     snprintf(head, sizeof(head),
         "{\"fs_ok\":%s,\"playing\":%s,\"loop\":%s,\"name\":\"%s\",\"media\":\"%s\",\"frame\":%u,\"frames\":%u,"
-        "\"unsupported\":%u,\"pos\":[%u,%u,%u,%u],\"powered\":%s,\"plays\":%u,\"files\":%u,"
+        "\"unsupported\":%u,\"pos\":[%u,%u,%u,%u],\"pulse_us\":[%u,%u,%u,%u],\"gpio\":[%d,%d,%d,%d],"
+        "\"rmt_cmd\":%u,\"powered\":%s,\"plays\":%u,\"files\":%u,"
+        "\"ack_ok\":%d,\"ack_fail\":%d,\"diag\":\"%s\","
         "\"speed\":%.2f,\"speed_default\":%.2f,\"expected_ms\":%u,\"elapsed_ms\":%u,\"music_ms\":%u,"
         "\"fs_used\":%u,\"fs_total\":%u,\"list\":",
         m.fs_ok?"true":"false", m.playing?"true":"false", m.loop?"true":"false", m.name, m.media,
         (unsigned)m.frame, (unsigned)m.frames, (unsigned)m.unsupported,
-        m.pos[0], m.pos[1], m.pos[2], m.pos[3], m.powered?"true":"false", (unsigned)m.plays,
-        (unsigned)m.files, m.speed, m.speed_default, (unsigned)m.expected_ms, (unsigned)m.elapsed_ms, (unsigned)m.music_ms,
+        m.pos[0], m.pos[1], m.pos[2], m.pos[3],
+        (unsigned)servo_pulse_us(0), (unsigned)servo_pulse_us(1),
+        (unsigned)servo_pulse_us(2), (unsigned)servo_pulse_us(3),
+        servo_gpio(0), servo_gpio(1), servo_gpio(2), servo_gpio(3),
+        (unsigned)servo_rmt_cmd(), m.powered?"true":"false", (unsigned)m.plays,
+        (unsigned)m.files, servo_ack_ok(), servo_ack_fail(), servo_diag(),
+        m.speed, m.speed_default, (unsigned)m.expected_ms, (unsigned)m.elapsed_ms, (unsigned)m.music_ms,
         (unsigned)m.fs_used, (unsigned)m.fs_total);
     httpd_resp_set_type(r, "application/json");
     httpd_resp_send_chunk(r, head, strlen(head));
@@ -245,9 +304,33 @@ static esp_err_t post_motion(httpd_req_t *r)
         legs_stop();
     } else if (!strcmp(a, "release")) {
         legs_release();
+    } else if (!strcmp(a, "rmt_cmd")) {
+        const cJSON *c = cJSON_GetObjectItemCaseSensitive(j, "cmd");
+        const cJSON *d = cJSON_GetObjectItemCaseSensitive(j, "data");
+        const cJSON *enc = cJSON_GetObjectItemCaseSensitive(j, "encode");
+        uint8_t cmd = cJSON_IsNumber(c) ? (uint8_t)c->valueint : servo_rmt_cmd();
+        uint16_t data = cJSON_IsNumber(d) ? (uint16_t)d->valueint : 0;
+        if (cJSON_IsNumber(enc)) servo_set_encode(enc->valueint);
+        servo_set_rmt_cmd(cmd);
+        servo_rmt_poke(cmd, data);
+    } else if (!strcmp(a, "bitbang")) {
+        const cJSON *d = cJSON_GetObjectItemCaseSensitive(j, "deg");
+        const cJSON *ms = cJSON_GetObjectItemCaseSensitive(j, "ms");
+        int deg = cJSON_IsNumber(d) ? d->valueint : 90;
+        int ms_v = cJSON_IsNumber(ms) ? ms->valueint : 2000;
+        if (ms_v < 200) ms_v = 200;
+        if (ms_v > 10000) ms_v = 10000;
+        servo_bitbang_test(deg, ms_v);
+    } else if (!strcmp(a, "pin_buzz")) {
+        const cJSON *ms = cJSON_GetObjectItemCaseSensitive(j, "ms");
+        int ms_v = cJSON_IsNumber(ms) ? ms->valueint : 5000;
+        if (ms_v < 500) ms_v = 500;
+        if (ms_v > 20000) ms_v = 20000;
+        servo_pin_buzz(ms_v);
     } else if (!strcmp(a, "pose")) {
         const cJSON *p = cJSON_GetObjectItemCaseSensitive(j, "pos");
         const cJSON *ms = cJSON_GetObjectItemCaseSensitive(j, "ms");
+        const cJSON *hold = cJSON_GetObjectItemCaseSensitive(j, "hold");
         uint8_t deg[4] = { 90, 90, 90, 90 };
         if (!cJSON_IsArray(p) || cJSON_GetArraySize(p) != 4) { e = ESP_ERR_INVALID_ARG; err = "pos must be 4 numbers 0..180"; }
         for (int i = 0; i < 4 && !err; i++) {
@@ -255,7 +338,8 @@ static esp_err_t post_motion(httpd_req_t *r)
             if (!cJSON_IsNumber(v) || v->valueint < 0 || v->valueint > 180) { e = ESP_ERR_INVALID_ARG; err = "pos must be 4 numbers 0..180"; }
             else deg[i] = (uint8_t)v->valueint;
         }
-        if (!err) e = legs_pose(deg, cJSON_IsNumber(ms) ? (uint32_t)ms->valueint : 500);
+        bool keep = cJSON_IsTrue(hold) || (cJSON_IsNumber(hold) && hold->valueint);
+        if (!err) e = legs_pose_hold(deg, cJSON_IsNumber(ms) ? (uint32_t)ms->valueint : 500, keep);
     } else if (!strcmp(a, "gait")) {
         const cJSON *kind = cJSON_GetObjectItemCaseSensitive(j, "kind");
         const cJSON *rev = cJSON_GetObjectItemCaseSensitive(j, "reverse");
@@ -283,7 +367,7 @@ static esp_err_t post_motion(httpd_req_t *r)
             if (e == ESP_ERR_INVALID_ARG) err = "cycles 0..60, period_ms 100..5000";
         }
     } else {
-        e = ESP_ERR_NOT_FOUND; err = "unknown action (play, gait, stop, pose, release)";
+        e = ESP_ERR_NOT_FOUND; err = "unknown action (play, gait, stop, pose, release, bitbang, pin_buzz)";
     }
     cJSON_Delete(j);
     char out[160];
@@ -362,12 +446,156 @@ static esp_err_t get_mic_wav(httpd_req_t *r)
     return ESP_OK;
 }
 
+static esp_err_t get_tricks(httpd_req_t *r)
+{
+    tricks_status_t t; tricks_get_status(&t);
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"mode\":\"%s\",\"detail\":\"%s\",\"busy\":%s,\"timer_ms_left\":%u,\"explore_ms_left\":%u}",
+             t.mode, t.detail, t.busy ? "true" : "false",
+             (unsigned)t.timer_ms_left, (unsigned)t.explore_ms_left);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, buf);
+}
+
+static esp_err_t post_tricks(httpd_req_t *r)
+{
+    int len = 0;
+    char *body = read_body(r, &len);
+    if (!body) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body"); return ESP_FAIL; }
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json"); return ESP_FAIL; }
+    cJSON *action = cJSON_GetObjectItem(j, "action");
+    esp_err_t e = ESP_ERR_INVALID_ARG;
+    const char *err = "bad action";
+    if (cJSON_IsString(action)) {
+        const char *a = action->valuestring;
+        if (!strcmp(a, "camping")) { e = tricks_camping_start(); err = "camping"; }
+        else if (!strcmp(a, "timer")) {
+            cJSON *sec = cJSON_GetObjectItem(j, "seconds");
+            double s = cJSON_IsNumber(sec) ? sec->valuedouble : 0;
+            e = tricks_timer_start((uint32_t)(s * 1000.0));
+            err = "timer";
+        } else if (!strcmp(a, "timer_cancel")) { tricks_timer_cancel(); e = ESP_OK; }
+        else if (!strcmp(a, "explore")) {
+            cJSON *sec = cJSON_GetObjectItem(j, "seconds");
+            uint32_t s = cJSON_IsNumber(sec) ? (uint32_t)sec->valuedouble : 20;
+            e = tricks_explore_start(s);
+            err = (e == ESP_ERR_NOT_SUPPORTED) ? "cliff required" :
+                  (e == ESP_ERR_INVALID_STATE) ? "busy or docked" : "explore";
+        } else if (!strcmp(a, "explore_stop")) { tricks_explore_stop(); e = ESP_OK; }
+        else if (!strcmp(a, "game")) {
+            cJSON *g = cJSON_GetObjectItem(j, "game");
+            e = cJSON_IsString(g) ? tricks_game_start(g->valuestring) : ESP_ERR_INVALID_ARG;
+            err = "game (rps|ttt|zombie|fix_bugs)";
+        } else if (!strcmp(a, "stop")) { tricks_stop(); e = ESP_OK; }
+    }
+    cJSON_Delete(j);
+    if (e != ESP_OK) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "{\"ok\":false,\"error\":\"%s\"}", err);
+        httpd_resp_set_type(r, "application/json");
+        httpd_resp_set_status(r, "409 Conflict");
+        return httpd_resp_sendstr(r, buf);
+    }
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, "{\"ok\":true}");
+}
+
+// ---- /api/xiaozhi: GET pair info; POST {"action":"pair"} refreshes OTA activation ----
+static esp_err_t get_xiaozhi(httpd_req_t *r)
+{
+    xiaozhi_stats_t xz; xiaozhi_get_stats(&xz);
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"enabled\":%s,\"wifi_connected\":%s,"
+             "\"device_id\":\"%s\",\"client_id\":\"%s\","
+             "\"activation\":\"%s\",\"ws_url\":\"%s\",\"ready\":%s,\"connected\":%s}",
+             xz.enabled ? "true" : "false", net_is_connected() ? "true" : "false",
+             xz.device_id, xz.client_id, xz.activation, xz.ws_url,
+             xz.ready ? "true" : "false", xz.connected ? "true" : "false");
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, buf);
+}
+
+static esp_err_t post_xiaozhi(httpd_req_t *r)
+{
+    char *body = read_body(r, NULL);
+    if (!body) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body"); return ESP_FAIL; }
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json"); return ESP_FAIL; }
+    const cJSON *act = cJSON_GetObjectItemCaseSensitive(j, "action");
+    const char *a = cJSON_IsString(act) ? act->valuestring : "";
+    bool pair = !strcmp(a, "pair") || !strcmp(a, "refresh");
+    bool dismiss = !strcmp(a, "dismiss") || !strcmp(a, "clear");
+    bool listen = !strcmp(a, "listen") || !strcmp(a, "wake");
+    bool stop = !strcmp(a, "stop") || !strcmp(a, "end");
+    cJSON_Delete(j);
+
+    httpd_resp_set_type(r, "application/json");
+    if (dismiss) {
+        xiaozhi_dismiss_activation();
+        return httpd_resp_sendstr(r, "{\"ok\":true,\"activation\":\"\"}");
+    }
+    if (listen) {
+        if (!xiaozhi_enabled()) {
+            httpd_resp_set_status(r, "409 Conflict");
+            return httpd_resp_sendstr(r, "{\"ok\":false,\"error\":\"voice_mode not xiaozhi\"}");
+        }
+        // session_begin recovers K210 + opens mic (don't open mic before recover).
+        xiaozhi_session_begin();
+        return httpd_resp_sendstr(r, "{\"ok\":true,\"action\":\"listen\"}");
+    }
+    if (stop) {
+        xiaozhi_session_end();
+        return httpd_resp_sendstr(r, "{\"ok\":true,\"action\":\"stop\"}");
+    }
+    if (!pair) {
+        httpd_resp_set_status(r, "400 Bad Request");
+        return httpd_resp_sendstr(r, "{\"ok\":false,\"error\":\"action must be pair|dismiss|listen|stop\"}");
+    }
+    if (!xiaozhi_enabled()) {
+        httpd_resp_set_status(r, "409 Conflict");
+        return httpd_resp_sendstr(r, "{\"ok\":false,\"error\":\"set voice_mode=xiaozhi and Save first\"}");
+    }
+    esp_err_t e = xiaozhi_pair_refresh();
+    xiaozhi_stats_t xz; xiaozhi_get_stats(&xz);
+    char out[640];
+    if (e == ESP_ERR_INVALID_STATE) {
+        httpd_resp_set_status(r, "409 Conflict");
+        snprintf(out, sizeof(out),
+                 "{\"ok\":false,\"error\":\"Wi-Fi STA not connected — join home Wi-Fi first\","
+                 "\"device_id\":\"%s\",\"client_id\":\"%s\"}", xz.device_id, xz.client_id);
+        return httpd_resp_sendstr(r, out);
+    }
+    if (e == ESP_ERR_INVALID_ARG) {
+        httpd_resp_set_status(r, "400 Bad Request");
+        return httpd_resp_sendstr(r, "{\"ok\":false,\"error\":\"ota_url empty\"}");
+    }
+    if (e != ESP_OK) {
+        httpd_resp_set_status(r, "502 Bad Gateway");
+        snprintf(out, sizeof(out),
+                 "{\"ok\":false,\"error\":\"OTA failed: %s\",\"device_id\":\"%s\",\"client_id\":\"%s\"}",
+                 esp_err_to_name(e), xz.device_id, xz.client_id);
+        return httpd_resp_sendstr(r, out);
+    }
+    snprintf(out, sizeof(out),
+             "{\"ok\":true,\"device_id\":\"%s\",\"client_id\":\"%s\","
+             "\"activation\":\"%s\",\"ws_url\":\"%s\",\"ready\":%s}",
+             xz.device_id, xz.client_id, xz.activation, xz.ws_url,
+             xz.ready ? "true" : "false");
+    return httpd_resp_sendstr(r, out);
+}
+
 void rest_api_register(httpd_handle_t srv)
 {
     static const httpd_uri_t routes[] = {
         { .uri = "/api/config",   .method = HTTP_GET,  .handler = get_config },
         { .uri = "/api/config",   .method = HTTP_POST, .handler = post_config },
+        { .uri = "/api/wifi/scan",.method = HTTP_GET,  .handler = get_wifi_scan },
         { .uri = "/api/status",   .method = HTTP_GET,  .handler = get_status },
+        { .uri = "/api/xiaozhi",  .method = HTTP_GET,  .handler = get_xiaozhi },
+        { .uri = "/api/xiaozhi",  .method = HTTP_POST, .handler = post_xiaozhi },
         { .uri = "/api/tone",     .method = HTTP_POST, .handler = post_tone },
         { .uri = "/api/play_pcm", .method = HTTP_POST, .handler = post_play_pcm },
         { .uri = "/api/mic.wav",  .method = HTTP_GET,  .handler = get_mic_wav },
@@ -375,6 +603,8 @@ void rest_api_register(httpd_handle_t srv)
         { .uri = "/api/controls", .method = HTTP_POST, .handler = post_controls },
         { .uri = "/api/motion",   .method = HTTP_GET,  .handler = get_motion },
         { .uri = "/api/motion",   .method = HTTP_POST, .handler = post_motion },
+        { .uri = "/api/tricks",   .method = HTTP_GET,  .handler = get_tricks },
+        { .uri = "/api/tricks",   .method = HTTP_POST, .handler = post_tricks },
         { .uri = "/api/power",    .method = HTTP_POST, .handler = post_power },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {

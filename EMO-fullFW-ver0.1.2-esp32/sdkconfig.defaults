@@ -14,6 +14,7 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
 # --- CPU / FreeRTOS ---
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
@@ -39,5 +40,15 @@ CONFIG_SPIFFS_OBJ_NAME_LEN=64
 # --- Logging ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
+# --- IRAM: RMT servo TX can live in flash; keeps iram0 under the ESP32 limit ---
+# CONFIG_RMT_ENCODER_FUNC_IN_IRAM is not set
+# CONFIG_RMT_TX_ISR_HANDLER_IN_IRAM is not set
+# CONFIG_RMT_RX_ISR_HANDLER_IN_IRAM is not set
+# CONFIG_MCPWM_ISR_HANDLER_IN_IRAM is not set
+
 # --- EMO-Bridge defaults that newer builds expect ---
 CONFIG_EMO_MOTION_SPEED_PCT=100
+# Stock gait = MCPWM always driven at boot (FUN_40262f7c). Keep PWM on so desk
+# twitch tests are visible; set IDLE_MS>0 later to save current if needed.
+CONFIG_EMO_SERVO_HOLD_AT_BOOT=y
+CONFIG_EMO_SERVO_IDLE_MS=0
