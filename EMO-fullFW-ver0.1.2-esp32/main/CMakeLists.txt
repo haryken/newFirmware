@@ -19,6 +19,7 @@ idf_component_register(
         "touch_pet.c"
         "behavior.c"
         "tricks.c"
+        "anim.c"
         # network
         "net.c"
         "captive_dns.c"

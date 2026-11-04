@@ -415,13 +415,24 @@ static void mcp_tools_list(cJSON *id)
         "{\"name\":\"self.robot.play_face\",\"description\":\"Show a K210 face animation by asset name.\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"e.g. stay_wink_1\"}},\"required\":[\"name\"]}},"
         "{\"name\":\"self.robot.stop\",\"description\":\"Stop motion and tricks (camping/explore/game).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
-        "{\"name\":\"self.robot.camping\",\"description\":\"Run camping sequence (tent, barbecue, campfire).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+        "{\"name\":\"self.robot.camping\",\"description\":\"Go camping (cam trai): tent, fishing, barbecue, frisbee, campfire. Optional activity.\",\"inputSchema\":"
+        "{\"type\":\"object\",\"properties\":{\"activity\":{\"type\":\"string\",\"description\":\"optional: tent|fishing|barbecue|frisbee|campfire (default: all)\"}}}},"
+        "{\"name\":\"self.robot.fireworks\",\"description\":\"Watch / set off fireworks (phao hoa, ban phao hoa).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+        "{\"name\":\"self.robot.spray_paint\",\"description\":\"Spray paint game (phun son, son tuong).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+        "{\"name\":\"self.robot.roll_dice\",\"description\":\"Roll a dice (xuc xac, do xuc xac, tung xuc xac).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+        "{\"name\":\"self.robot.fight\",\"description\":\"Fight with a weapon (danh nhau, vu khi): boomerang, radish knife, slingshot, water bubble gun.\",\"inputSchema\":"
+        "{\"type\":\"object\",\"properties\":{\"weapon\":{\"type\":\"string\",\"description\":\"optional: boomerang|radish|slingshot|bubble\"}}}},"
+        "{\"name\":\"self.robot.exercise\",\"description\":\"Workout / fitness with the robot (tap the duc, tap gym): warm-up, aerobic, core, power, relax.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+        "{\"name\":\"self.robot.drive\",\"description\":\"Drive a vehicle (lai xe): bicycle, car or ship.\",\"inputSchema\":"
+        "{\"type\":\"object\",\"properties\":{\"vehicle\":{\"type\":\"string\",\"description\":\"optional: bicycle|car|ship\"}}}},"
+        "{\"name\":\"self.robot.play_instruments\",\"description\":\"Play musical instruments (choi nhac cu, dan, hoa tau cung nhau / ensemble): drum, maraca, piano, tambourine, trumpet. Without instrument = play together.\",\"inputSchema\":"
+        "{\"type\":\"object\",\"properties\":{\"instrument\":{\"type\":\"string\",\"description\":\"optional: drum|maraca|piano|tambourine|trumpet\"}}}},"
         "{\"name\":\"self.robot.timer\",\"description\":\"Local countdown timer then alarm motion.\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"number\",\"description\":\"1..1800\"}},\"required\":[\"seconds\"]}},"
         "{\"name\":\"self.robot.explore\",\"description\":\"Gated explore walk (needs cliff sensor; not while docked).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"number\",\"description\":\"5..120, default 20\"}}}},"
         "{\"name\":\"self.robot.hands_up\",\"description\":\"Use when the user says 'hands up', 'put your hands up', 'don't move', 'shoot', 'bang', or plays a gun game (gio tay len / ban sung): robot raises its hands, then dodges or gets shot.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
-        "{\"name\":\"self.robot.play_game\",\"description\":\"Anim demo game: rps|ttt|zombie|fix_bugs (not full CV).\",\"inputSchema\":"
+        "{\"name\":\"self.robot.play_game\",\"description\":\"Anim demo game: rps|ttt|zombie|fix_bugs (not full CV). Other activities have their own tools.\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"game\":{\"type\":\"string\"}},\"required\":[\"game\"]}},"
         "{\"name\":\"self.audio_speaker.set_volume\",\"description\":\"Set speaker volume 0-255 (stock ~104).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"volume\":{\"type\":\"number\"}},\"required\":[\"volume\"]}},"
@@ -640,9 +651,31 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
         legs_stop();
         ok = true;
         strcpy(msg, "stopped");
-    } else if (!strcmp(name, "self.robot.camping")) {
-        ok = (tricks_camping_start() == ESP_OK);
-        snprintf(msg, sizeof(msg), ok ? "camping started" : "camping busy/failed");
+    } else if (!strcmp(name, "self.robot.camping") || !strcmp(name, "self.robot.fireworks") ||
+               !strcmp(name, "self.robot.spray_paint") || !strcmp(name, "self.robot.roll_dice") ||
+               !strcmp(name, "self.robot.fight") || !strcmp(name, "self.robot.exercise") ||
+               !strcmp(name, "self.robot.drive") || !strcmp(name, "self.robot.play_instruments")) {
+        // stock profile "shows" (tricks.c show_*): optional free-text sub-choice after ':'
+        static const struct { const char *tool, *show, *key; } k_shows[] = {
+            { "self.robot.camping", "camp", "activity" }, { "self.robot.fireworks", "fireworks", NULL },
+            { "self.robot.spray_paint", "spray", NULL }, { "self.robot.roll_dice", "dice", NULL },
+            { "self.robot.fight", "fight", "weapon" }, { "self.robot.exercise", "fit", NULL },
+            { "self.robot.drive", "drive", "vehicle" }, { "self.robot.play_instruments", "band", "instrument" },
+        };
+        char game[32] = "";
+        for (size_t i = 0; i < sizeof(k_shows) / sizeof(k_shows[0]); i++) {
+            if (strcmp(name, k_shows[i].tool)) continue;
+            const char *sub = NULL;
+            if (args && k_shows[i].key) {
+                cJSON *a = cJSON_GetObjectItem(args, k_shows[i].key);
+                if (cJSON_IsString(a) && a->valuestring[0]) sub = a->valuestring;
+            }
+            if (sub) snprintf(game, sizeof(game), "%s:%.14s", k_shows[i].show, sub);
+            else snprintf(game, sizeof(game), "%s", k_shows[i].show);
+            for (char *c = game; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;
+        }
+        ok = (tricks_game_start(game) == ESP_OK);
+        snprintf(msg, sizeof(msg), ok ? "started %.60s" : "busy/failed %.60s", game);
     } else if (!strcmp(name, "self.robot.timer")) {
         double sec = 0;
         if (args) {

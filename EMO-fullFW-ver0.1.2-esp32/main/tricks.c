@@ -4,6 +4,7 @@
 #include "foot_cliff.h"
 #include "legs.h"
 #include "video.h"
+#include "anim.h"
 #include "microphone.h"
 #include "k210_uart.h"
 #include "k210_boot.h"
@@ -66,22 +67,171 @@ static void wait_ms(uint32_t ms)
     }
 }
 
+static char s_show_mode[24] = "show";
+
+// ---- stock "shows": sequences of profile animations (body motion + face + sound) ----
+// Play animation `name` (see anim.c) and wait until both its motion and its clip are over.
+static void show_step(const char *name)
+{
+    if (s_stop) return;
+    set_st(s_show_mode, name, true);
+    uint32_t d = 0;
+    if (anim_play(name, &d) != ESP_OK) return;
+    if (d > 60000) d = 60000;
+    int64_t until = esp_timer_get_time() + (int64_t)d * 1000;
+    wait_ms(300);
+    while (!s_stop) {
+        legs_status_t m; legs_get_status(&m);
+        if (!m.playing && esp_timer_get_time() >= until) break;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    wait_ms(150);
+}
+
+static void show_stepf(const char *fmt, int n)
+{
+    char b[48];
+    snprintf(b, sizeof(b), fmt, n);
+    show_step(b);
+}
+
+static int rnd(int lo, int hi) { return lo + (int)(esp_random() % (unsigned)(hi - lo + 1)); }
+
+static bool arg_is(const char *arg, const char *w) { return arg && arg[0] && strstr(arg, w); }
+
+static void show_camp(const char *arg)
+{
+    strlcpy(s_show_mode, "camping", sizeof(s_show_mode));
+    bool all = !(arg && arg[0]);
+    if (all || arg_is(arg, "tent")) show_step("Camp_tent");
+    if (all || arg_is(arg, "fish")) {
+        show_step("Camp_fishing_start");
+        show_step("Camp_fishing_Casting");
+        show_stepf("Camp_fishing_wait_loop_%d", rnd(1, 2));
+        show_stepf("Camp_fishing_wait_loop_%d", rnd(1, 2));
+        show_stepf("Camp_fishing_Retrieve_%d", rnd(1, 3));
+        show_step("Camp_fishing_end");
+    }
+    if (all || arg_is(arg, "barbecue") || arg_is(arg, "bbq")) {
+        show_step("Camp_barbecue_ready");
+        show_step("Camp_barbecue_start");
+        show_stepf("Camp_barbecue_loop%d", 1);
+        show_stepf("Camp_barbecue_loop%d", 2);
+        show_step("Camp_barbecue_loop_Cooked");
+        show_step("Camp_barbecue_end");
+    }
+    if (all || arg_is(arg, "frisbee")) {
+        show_step("Camp_frisbee_throw");
+        show_step("Camp_frisbee_run");
+        show_step("Camp_frisbee_catch");
+    }
+    if (all || arg_is(arg, "fire")) {
+        show_step("campfire_start");
+        show_step("campfire_loop1");
+        show_step("campfire_end");
+    }
+}
+
+static void show_fireworks(void)
+{
+    strlcpy(s_show_mode, "fireworks", sizeof(s_show_mode));
+    int o[3] = { 1, 2, 3 };                                  // all three bursts, random order
+    for (int i = 2; i > 0; i--) { int k = rnd(0, i), t = o[i]; o[i] = o[k]; o[k] = t; }
+    for (int i = 0; i < 3 && !s_stop; i++) show_stepf("game_firework_%d", o[i]);
+    show_step("game_firework_end");
+}
+
+static void show_spray(void)
+{
+    strlcpy(s_show_mode, "spray", sizeof(s_show_mode));
+    show_step("Spray_paint_start");
+    show_step("Spray_paint_stay_1");
+    for (int round = 0; round < 3 && !s_stop; round++) {
+        const char *side = (esp_random() & 1) ? "left" : "right";
+        char n[48];
+        snprintf(n, sizeof(n), "Spray_paint_stay_%s_2", side); show_step(n);
+        bool hit = (esp_random() % 100) < 60;
+        snprintf(n, sizeof(n), hit ? "Spray_paint_hit_%s" : "Spray_paint_miss_%s", side); show_step(n);
+        if (round == 2 || !hit) {
+            if (hit) snprintf(n, sizeof(n), "Spray_paint_end_%s%d", side, rnd(1, 3));
+            else     snprintf(n, sizeof(n), "Spray_paint_end_miss%d", rnd(1, 3));
+            show_step(n);
+            return;
+        }
+    }
+}
+
+static void show_dice(void)
+{
+    static const char *w[] = { "one", "two", "three", "four", "five", "six" };
+    strlcpy(s_show_mode, "dice", sizeof(s_show_mode));
+    char n[32];
+    snprintf(n, sizeof(n), "dice_%s_%d", w[rnd(0, 5)], rnd(1, 2));
+    show_step(n);
+}
+
+static void show_fight(const char *arg)
+{
+    static const char *f[] = { "Fight_Boomerang_miss", "Fight_Radish_knife", "Fight_Slingshot_hit",
+                               "Fight_Slingshot_miss", "Fight_Water_Bubble_gun" };
+    strlcpy(s_show_mode, "fight", sizeof(s_show_mode));
+    if (arg_is(arg, "boom")) show_step(f[0]);
+    else if (arg_is(arg, "radish") || arg_is(arg, "knife")) show_step(f[1]);
+    else if (arg_is(arg, "sling")) show_step(f[rnd(2, 3)]);
+    else if (arg_is(arg, "bubble") || arg_is(arg, "water")) show_step(f[4]);
+    else show_step(f[rnd(0, 4)]);
+}
+
+static void show_fit(void)
+{
+    strlcpy(s_show_mode, "exercise", sizeof(s_show_mode));
+    show_step("Fit_start");
+    show_step("Fit_321");
+    static const struct { const char *fmt; int n; } blocks[] = {
+        { "Fit_Warmup_loop%d", 4 }, { "Fit_Aerobic_loop%d", 4 }, { "Fit_Core_loop%d", 6 },
+        { "Fit_Power_loop%d", 6 }, { "Fit_Relax_loop%d", 5 },
+    };
+    for (size_t b = 0; b < sizeof(blocks) / sizeof(blocks[0]) && !s_stop; b++) {
+        for (int r = 0; r < 3 && !s_stop; r++) show_stepf(blocks[b].fmt, rnd(1, blocks[b].n));
+        if (b + 1 < sizeof(blocks) / sizeof(blocks[0])) show_step((b & 1) ? "Fit_Rest" : "Fit_Next");
+    }
+    show_step("Fit_Good");
+    show_step("Fit_end");
+}
+
+static void show_drive(const char *arg)
+{
+    strlcpy(s_show_mode, "drive", sizeof(s_show_mode));
+    if (arg_is(arg, "bike") || arg_is(arg, "bicycle")) show_step("Drive_bicycle");
+    else if (arg_is(arg, "car")) show_step("Drive_car");
+    else if (arg_is(arg, "ship") || arg_is(arg, "boat")) show_step("Drive_ship");
+    else { static const char *d[] = { "Drive_bicycle", "Drive_car", "Drive_ship" }; show_step(d[rnd(0, 2)]); }
+}
+
+static void show_band(const char *arg)
+{
+    static const char *inst[] = { "drum", "maraca", "piano", "tambourine", "trumpet" };
+    strlcpy(s_show_mode, "band", sizeof(s_show_mode));
+    int pick = -1;
+    for (int i = 0; i < 5; i++) if (arg_is(arg, inst[i])) pick = i;
+    char n[40];
+    if (pick < 0) {                                        // play together: ensemble part of one instrument
+        static const char *e[] = { "emo_ensemble_drum_1", "emo_ensemble_maraca_1", "emo_ensemble_piano_1" };
+        show_step(e[rnd(0, 2)]);
+        return;
+    }
+    snprintf(n, sizeof(n), pick == 4 ? "emo_%s_reday1" : "emo_%s_ready1", inst[pick]); show_step(n);
+    if (pick == 2) snprintf(n, sizeof(n), "emo_piano_%d", rnd(1, 2));
+    else if (pick <= 1) snprintf(n, sizeof(n), "emo_ensemble_%s_1", inst[pick]);   // no solo clip in the profile
+    else snprintf(n, sizeof(n), "emo_%s_1", inst[pick]);
+    show_step(n);
+    snprintf(n, sizeof(n), "emo_%s_eixt1", inst[pick]); show_step(n);
+}
+
 static void camping_body(void)
 {
-    static const char *steps[] = {
-        "Camp_tent",
-        "Camp_barbecue_start", "Camp_barbecue_loop1", "Camp_barbecue_end",
-        "campfire_start", "campfire_loop1", "campfire_end",
-    };
     set_st("camping", "running", true);
-    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]) && !s_stop; i++) {
-        char d[40];
-        snprintf(d, sizeof(d), "%s", steps[i]);
-        set_st("camping", d, true);
-        play_mot(steps[i]);
-        wait_motion_or_stop();
-        wait_ms(400);
-    }
+    show_camp(NULL);
 }
 
 static void explore_body(uint32_t seconds)
@@ -251,7 +401,7 @@ static void game_gun(void)
 typedef struct {
     enum { JOB_CAMP, JOB_EXPLORE, JOB_GAME } kind;
     uint32_t seconds;
-    char game[16];
+    char game[32];
 } job_t;
 
 static job_t s_job;
@@ -270,6 +420,18 @@ static void tricks_task(void *arg)
         else if (!strcmp(job.game, "zombie")) game_zombie();
         else if (!strcmp(job.game, "fix_bugs")) game_fix_bugs();
         else if (!strcmp(job.game, "gun")) game_gun();
+        else {
+            char g[32]; strlcpy(g, job.game, sizeof(g));
+            char *arg = strchr(g, ':'); if (arg) *arg++ = 0;
+            if (!strcmp(g, "fireworks")) show_fireworks();
+            else if (!strcmp(g, "spray")) show_spray();
+            else if (!strcmp(g, "dice")) show_dice();
+            else if (!strcmp(g, "fight")) show_fight(arg);
+            else if (!strcmp(g, "fit")) show_fit();
+            else if (!strcmp(g, "drive")) show_drive(arg);
+            else if (!strcmp(g, "camp")) show_camp(arg);
+            else if (!strcmp(g, "band")) show_band(arg);
+        }
         break;
     }
     s_task = NULL;
@@ -394,8 +556,15 @@ esp_err_t tricks_game_start(const char *game)
 {
     if (!game || !game[0]) return ESP_ERR_INVALID_ARG;
     if (strcmp(game, "rps") && strcmp(game, "ttt") &&
-        strcmp(game, "zombie") && strcmp(game, "fix_bugs") && strcmp(game, "gun"))
-        return ESP_ERR_INVALID_ARG;
+        strcmp(game, "zombie") && strcmp(game, "fix_bugs") && strcmp(game, "gun")) {
+        static const char *k_shows[] = { "fireworks", "spray", "dice", "fight", "fit", "drive", "camp", "band" };
+        bool okk = false;
+        for (size_t i = 0; i < sizeof(k_shows) / sizeof(k_shows[0]); i++) {
+            size_t n = strlen(k_shows[i]);
+            if (!strncmp(game, k_shows[i], n) && (game[n] == 0 || game[n] == ':')) okk = true;
+        }
+        if (!okk || strlen(game) >= sizeof(((job_t *)0)->game)) return ESP_ERR_INVALID_ARG;
+    }
     job_t j = { .kind = JOB_GAME };
     strlcpy(j.game, game, sizeof(j.game));
     return launch(j);
