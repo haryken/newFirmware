@@ -289,10 +289,6 @@ static const char *const k_dances[] = {
     "d6_Rollercoaster", "d7_FlashBack", "d8_Click2", "d9_BlameYourself",
     "d10_CanITakeYouThere", "d11_OceanBlue", "Christmas_song",
 };
-static const char *const k_sings[] = {
-    "sings1_1", "sings1_2", "sings1_3", "sings1_4", "sings1_5",
-    "sings2_1", "sings2_2", "sings2_3", "sings2_4",
-};
 static const char *const k_looks[] = {
     "look_around_1", "look_around_2", "look_around_3", "look_around_4",
     "look_around_5", "look_around_6", "look_around_7", "look_around_8",
@@ -412,7 +408,7 @@ static void mcp_tools_list(cJSON *id)
         "{\"name\":\"self.robot.act_like\",\"description\":\"Act like an animal (stock: Act like a pig).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"animal\":{\"type\":\"string\",\"description\":\"pig,dog,cat,duck,...\"}},\"required\":[\"animal\"]}},"
         "{\"name\":\"self.robot.laser_eyes\",\"description\":\"Laser eyes show (stock: Laser eyes).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
-        "{\"name\":\"self.robot.pose\",\"description\":\"Do a pose / show-off motion.\",\"inputSchema\":"
+        "{\"name\":\"self.robot.pose\",\"description\":\"Do a random show-off pose (optional name). NOT for 'hands up' - use self.robot.hands_up for that.\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":\"string\"}}}},"
         "{\"name\":\"self.robot.play_motion\",\"description\":\"Play any .mot by exact name (582 on SPIFFS).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"]}},"
@@ -424,7 +420,7 @@ static void mcp_tools_list(cJSON *id)
         "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"number\",\"description\":\"1..1800\"}},\"required\":[\"seconds\"]}},"
         "{\"name\":\"self.robot.explore\",\"description\":\"Gated explore walk (needs cliff sensor; not while docked).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"number\",\"description\":\"5..120, default 20\"}}}},"
-        "{\"name\":\"self.robot.hands_up\",\"description\":\"Hands-up shooting game (stock: Hands up / Don't move): robot raises its hands, then dodges or shoots.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+        "{\"name\":\"self.robot.hands_up\",\"description\":\"Use when the user says 'hands up', 'put your hands up', 'don't move', 'shoot', 'bang', or plays a gun game (gio tay len / ban sung): robot raises its hands, then dodges or gets shot.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
         "{\"name\":\"self.robot.play_game\",\"description\":\"Anim demo game: rps|ttt|zombie|fix_bugs (not full CV).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"game\":{\"type\":\"string\"}},\"required\":[\"game\"]}},"
         "{\"name\":\"self.audio_speaker.set_volume\",\"description\":\"Set speaker volume 0-255 (stock ~104).\",\"inputSchema\":"
@@ -507,9 +503,60 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
             cJSON *w = cJSON_GetObjectItem(args, "which");
             if (cJSON_IsString(w) && w->valuestring[0]) n = w->valuestring;
         }
-        // Stock "Sing a song": sings1_*/sings2_* (microphone face + song), never a dance.
-        if (!n) n = pick_str(k_sings, sizeof(k_sings) / sizeof(k_sings[0]));
-        ok = play_mot(n, msg, sizeof(msg));
+        // Stock "Sing a song" (profile.json): Singer_ready (mic pick-up, 3 s), then a random
+        // song = sings<g>_1.avi (singing face) + /spiffs/mp3/<song>.mp3 on the K210, while a
+        // sings*.mot moves the body (the mot is shared: song k -> mot ((k-1) % n) + 1).
+        static const struct { uint8_t g, k; const char *mp3; } k_songs[] = {
+    { 1, 1, "sings1_1_ballroom" },
+    { 1, 2, "sings1_2_dance_monkey" },
+    { 1, 3, "sings1_3_guan_lan_gao_shou" },
+    { 1, 4, "sings1_4_love_the_way_you_lie" },
+    { 1, 5, "sings1_5_shape_of_you" },
+    { 1, 6, "sings1_6_wallerman" },
+    { 1, 7, "sings1_7_foxsay" },
+    { 1, 8, "sings1_8_bao_ke_meng" },
+    { 1, 9, "sings1_9_fall_in_love_for_the_night" },
+    { 1, 10, "sings1_10_sad" },
+    { 1, 11, "sings1_11_cant_stop_the_feeling" },
+    { 1, 12, "sings1_12_closer" },
+    { 1, 13, "sings1_13_sunflower" },
+    { 1, 14, "sings1_14_APT" },
+    { 1, 15, "sings1_15_Moves_Like_Jagger" },
+    { 1, 16, "sings1_16_Beauty_and_a_Beat" },
+    { 2, 1, "sings2_1_baby" },
+    { 2, 2, "sings2_2_huan_le_song" },
+    { 2, 3, "sings2_3_jingle_bell" },
+    { 2, 4, "sings2_4_lian_ai_xun_huan" },
+    { 2, 5, "sings2_5_Orpheus_in_the_Underworld" },
+    { 2, 6, "sings2_6_tom" },
+    { 2, 7, "sings2_7_tuziwu" },
+    { 2, 8, "sings2_8_duo_la_A_meng1" },
+    { 2, 9, "sings2_9_duo_la_A_meng2" },
+    { 2, 10, "sings2_10_shi_jie_bei_1998" },
+    { 2, 11, "sings2_11_see_you_again" },
+    { 2, 12, "sings2_12_California_Gurls" },
+    { 2, 13, "sings2_13_Jiggle" },
+        };
+        int si = (int)(esp_random() % (sizeof(k_songs) / sizeof(k_songs[0])));
+        if (n) {                                              // which = "sings1_5" etc.
+            int g = 0, k = 0;
+            if (sscanf(n, "sings%d_%d", &g, &k) == 2)
+                for (size_t q = 0; q < sizeof(k_songs) / sizeof(k_songs[0]); q++)
+                    if (k_songs[q].g == g && k_songs[q].k == k) si = (int)q;
+        }
+        int sg = k_songs[si].g, sk = k_songs[si].k;
+        char motn[16], avin[16];
+        snprintf(motn, sizeof(motn), "sings%d_%d", sg, ((sk - 1) % (sg == 1 ? 5 : 4)) + 1);
+        snprintf(avin, sizeof(avin), "sings%d_1", sg);
+        bool sack = false;
+        video_play_face("Singer_ready", 0, true, &sack);
+        vTaskDelay(pdMS_TO_TICKS(3000));                       // mic pick-up clip
+        legs_opts_t so = LEGS_OPTS_DEFAULT;
+        so.media = false;
+        ok = (legs_play(motn, so) == ESP_OK);
+        video_play_playlist(avin, k_songs[si].mp3, &sack);
+        if (ok) snprintf(msg, sizeof(msg), "singing %s", k_songs[si].mp3);
+        else snprintf(msg, sizeof(msg), "play failed: %s", motn);
     } else if (!strcmp(name, "self.robot.dance")) {
         const char *n = NULL;
         if (args) {
@@ -565,7 +612,13 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
             if (cJSON_IsString(w) && w->valuestring[0]) n = w->valuestring;
         }
         if (!n) n = pick_str(k_poses, sizeof(k_poses) / sizeof(k_poses[0]));
-        ok = play_mot(n, msg, sizeof(msg));
+        if (!strncmp(n, "hand", 4) || strstr(n, "gun") || strstr(n, "hands")) {   // model asked for 'hands_up' as a pose
+            ok = (tricks_game_start("gun") == ESP_OK);
+            snprintf(msg, sizeof(msg), ok ? "hands up game" : "game busy/failed");
+        } else {
+            ok = play_mot(n, msg, sizeof(msg));
+            if (!ok) ok = play_mot(pick_str(k_poses, sizeof(k_poses) / sizeof(k_poses[0])), msg, sizeof(msg));
+        }
     } else if (!strcmp(name, "self.robot.play_motion")) {
         const char *n = NULL;
         if (args) {
@@ -1523,23 +1576,22 @@ static bool on_speaker_idle(void)
 // wake the robot to talk after the skill ends.
 static void skill_home_work(void)
 {
-    // 1) let Xiaozhi finish talking (also the reply it makes after the tool result)
-    int quiet_ms = 0;
-    for (int i = 0; i < 300 && quiet_ms < 2500; i++) {          // 30 s max
-        if (s_speaking || s_odec_pending || speaker_busy()) quiet_ms = 0;
-        else quiet_ms += 100;
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    // 1) the tool reply is already sent: cut Xiaozhi off right away (go_home_work stops the speaker and closes the ws)
+    vTaskDelay(pdMS_TO_TICKS(120));                              // let the reply frame leave first
     // 2) conversation over: close the ws, mic idle, wake word armed
     s_home_quiet = true;
     go_home_work();
     s_home_quiet = false;
+    // The decoder may still push the rest of the cut sentence into the speaker (MODE_SPK again):
+    // let it finish, then throw that audio away so the skill's first clip is not swallowed.
+    for (int i = 0; i < 40 && s_odec_pending; i++) vTaskDelay(pdMS_TO_TICKS(50));
+    speaker_interrupt("skill start");
     // K210 was left in speaker mode by the TTS: bring it back to a state that
     // answers (same sequence as recover_work) or the song's face/mp3 gets no ACK.
     speaker_end_handoff();
     k210_uart_send_mode(K210_MODE_IDLE);
     k210_link_set_state(LINK_IDLE);
-    vTaskDelay(pdMS_TO_TICKS(300));
+    vTaskDelay(pdMS_TO_TICKS(150));
     bool alive = k210_link_ping(400);
     ESP_LOGI(TAG, "skill: K210 after IDLE %s", alive ? "ALIVE" : "DEAD -> recover");
     if (!alive) k210_link_recover_after_spk();

@@ -1,5 +1,6 @@
 // behavior.c — see behavior.h.
 #include "behavior.h"
+#include "tricks.h"
 #include "foot_cliff.h"
 #include "touch_pet.h"
 #include "legs.h"
@@ -325,7 +326,9 @@ static void dock_tick(void)
 #if CONFIG_EMO_DOCK_SLEEP_S > 0
     {
         static const char *const LOOPS[] = { "sleep_loop_1", "sleep_breath_1", "sleep_Fireflies_1", "sleep_loop_2", "sleep_breath_2", "sleep_Fireflies_2" };
-        bool busy = s_voice_busy || k210_link_state() == LINK_SPEAK;
+        tricks_status_t ts; tricks_get_status(&ts);
+        legs_status_t lm; legs_get_status(&lm);
+        bool busy = s_voice_busy || k210_link_state() == LINK_SPEAK || ts.busy || lm.playing;   // a game / song / dance owns the face
         if (busy) {
             // a conversation owns the face: restart the idle timer, sleep again later
             s_sleeping = false;
@@ -429,8 +432,12 @@ void behavior_get_status(behavior_status_t *out)
     portEXIT_CRITICAL(&s_mux);
 }
 
+static volatile uint32_t s_yolo_count;
+uint32_t behavior_yolo_count(void) { return s_yolo_count; }
+
 void behavior_on_yolo(uint8_t cls, uint8_t x, uint8_t y)
 {
+    s_yolo_count++;
     (void)x; (void)y;
     if (!s_st.yolo_react || s_st.docked || s_petting) return;
     int64_t now = esp_timer_get_time();

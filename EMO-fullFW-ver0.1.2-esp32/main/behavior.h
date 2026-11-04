@@ -28,6 +28,7 @@ void behavior_get_status(behavior_status_t *out);
 
 // From K210 UART 0x3F (called on RX task — keep light).
 void behavior_on_yolo(uint8_t cls, uint8_t x, uint8_t y);
+uint32_t behavior_yolo_count(void);   // every K210 0x3F frame, for the hands-up game
 
 // Runtime toggles (also persisted via settings when saved from web).
 void behavior_set_docked(bool on);

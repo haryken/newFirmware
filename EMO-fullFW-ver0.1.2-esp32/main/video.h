@@ -20,6 +20,8 @@ extern "C" {
 // the paired sound. Waits <= 500 ms for the ACK, reported in *acked.
 // ESP_ERR_NOT_SUPPORTED when EMO_SD_FACES is off, ESP_ERR_INVALID_STATE while booting.
 esp_err_t video_play_face(const char *name, int loop, bool with_mp3, bool *acked);
+// Play /spiffs/avi/<avi>.avi with an arbitrary /spiffs/mp3/<mp3>.mp3 (stock profile.json media entries).
+esp_err_t video_play_playlist(const char *avi, const char *mp3, bool *acked);
 
 // Boot-sequence variant: no validation, 200 ms ANIM_DONE wait, 80 ms ACK wait.
 void video_boot_face(const char *name, bool with_mp3);

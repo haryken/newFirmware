@@ -4,6 +4,7 @@ idf_component_register(
         # K210 link: transport, coordinator, boot
         "k210_uart.c"
         "k210_spi.c"
+        "k210_file.c"
         "k210_link.c"
         "k210_boot.c"
         # robot functions

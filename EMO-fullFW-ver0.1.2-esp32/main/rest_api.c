@@ -11,6 +11,8 @@
 #include "battery.h"
 #include "behavior.h"
 #include "tricks.h"
+#include "k210_file.h"
+#include "esp_heap_caps.h"
 #include "legs.h"
 #include "servo.h"
 #include <string.h>
@@ -118,6 +120,33 @@ static esp_err_t get_wifi_scan(httpd_req_t *r)
     return e;
 }
 
+// ---- GET /api/k210file?path=/spiffs/json/profile.json&max=200000 : raw bytes from the K210 storage ----
+static esp_err_t get_k210file(httpd_req_t *r)
+{
+    char q[200] = "", path[160] = "", mx[12] = "";
+    httpd_req_get_url_query_str(r, q, sizeof(q));
+    if (httpd_query_key_value(q, "path", path, sizeof(path)) != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "path=");
+        return ESP_OK;
+    }
+    // url-decode %2F etc. minimally
+    char dec[160]; size_t j = 0;
+    for (size_t i = 0; path[i] && j < sizeof(dec) - 1; i++) {
+        if (path[i] == '%' && path[i + 1] && path[i + 2]) { char h[3] = { path[i + 1], path[i + 2], 0 }; dec[j++] = (char)strtol(h, NULL, 16); i += 2; }
+        else dec[j++] = path[i];
+    }
+    dec[j] = 0;
+    size_t cap = 200000;
+    if (httpd_query_key_value(q, "max", mx, sizeof(mx)) == ESP_OK) { long v = atol(mx); if (v > 0 && v <= 1000000) cap = (size_t)v; }
+    uint8_t *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) { httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"); return ESP_OK; }
+    size_t n = 0;
+    esp_err_t e = k210_file_read(dec, buf, cap, &n, 8000);
+    if (e != ESP_OK) httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, "no data");
+    else { httpd_resp_set_type(r, "application/octet-stream"); httpd_resp_send(r, (const char *)buf, n); }
+    free(buf);
+    return ESP_OK;
+}
 // ---- /api/status ----
 static esp_err_t get_status(httpd_req_t *r)
 {
@@ -603,6 +632,7 @@ void rest_api_register(httpd_handle_t srv)
         { .uri = "/api/config",   .method = HTTP_POST, .handler = post_config },
         { .uri = "/api/wifi/scan",.method = HTTP_GET,  .handler = get_wifi_scan },
         { .uri = "/api/status",   .method = HTTP_GET,  .handler = get_status },
+        { .uri = "/api/k210file", .method = HTTP_GET,  .handler = get_k210file },
         { .uri = "/api/xiaozhi",  .method = HTTP_GET,  .handler = get_xiaozhi },
         { .uri = "/api/xiaozhi",  .method = HTTP_POST, .handler = post_xiaozhi },
         { .uri = "/api/tone",     .method = HTTP_POST, .handler = post_tone },

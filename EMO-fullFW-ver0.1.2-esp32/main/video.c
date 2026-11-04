@@ -54,6 +54,18 @@ esp_err_t video_play_face(const char *name, int loop, bool with_mp3, bool *acked
     return k210_send_ext(0x02, json, acked);
 }
 
+esp_err_t video_play_playlist(const char *avi, const char *mp3, bool *acked)
+{
+    if (k210_link_booting()) return ESP_ERR_INVALID_STATE;
+    if (!avi || !mp3 || strlen(avi) > 60 || strlen(mp3) > 100) return ESP_ERR_INVALID_ARG;
+    char json[256];
+    snprintf(json, sizeof(json), "[0,[[\"/spiffs/avi/%s.avi\",[[0,\"/spiffs/mp3/%s.mp3\"]]]]]", avi, mp3);
+    k210_link_clear_anim_done();
+    k210_uart_send_short(0x09, 0x00, 0x00, 0x00);    // STOP_ANIM
+    k210_link_wait_anim_done(200);
+    return k210_send_ext(0x02, json, acked);
+}
+
 esp_err_t video_show_text(const char *text, bool *acked)
 {
     return k210_send_ext(0x44, text, acked);

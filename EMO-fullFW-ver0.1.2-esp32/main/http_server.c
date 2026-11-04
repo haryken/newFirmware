@@ -81,7 +81,7 @@ void http_server_start(void)
     // SoftAP: :80 so the phone captive portal pops the Wi-Fi page. STA: :8080 as before.
     cfg.server_port = ap ? 80 : 8080;
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 40;
+    cfg.max_uri_handlers = 48;
     cfg.lru_purge_enable = true;
     if (ap) cfg.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -105,7 +105,7 @@ void http_portal_start(void)
     cfg.server_port = 80;
     cfg.ctrl_port = 32769;
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 40;
+    cfg.max_uri_handlers = 48;
     cfg.max_open_sockets = 3;
     cfg.lru_purge_enable = true;
     cfg.uri_match_fn = httpd_uri_match_wildcard;

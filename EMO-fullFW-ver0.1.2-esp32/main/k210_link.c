@@ -2,6 +2,7 @@
 #include "k210_link.h"
 #include "k210_uart.h"
 #include "k210_spi.h"
+#include "k210_file.h"
 #include "k210_boot.h"
 #include "microphone.h"
 #include "speaker.h"
@@ -157,6 +158,8 @@ static void handle_short(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3)
     switch (cmd) {
     case 0x00: speaker_on_spk_req(val); break;            // SPK_REQ: room for one block
     case 0x01: microphone_on_mic_ready(val); break;       // MIC_READY: a mic frame, read it now
+    case 0x04: k210_file_on_chunk(val); break;            // FILE_CHUNK (ext 0x03 read)
+    case 0x05: k210_file_on_done(); break;                // file read finished
     case 0x08: s_anim_done_seen = true; break;            // ANIM_DONE
     case 0x0B: microphone_on_voice_event(p1, p2); break;  // WAKE (p1=1) / END_OF_SPEECH (p1=0)
     case 0x0D: break;                                     // mic level / direction, informational
