@@ -1,5 +1,6 @@
 // legs.c — see legs.h.
 #include "legs.h"
+#include "esp_heap_caps.h"
 #include "servo.h"
 #include "settings.h"
 #include "sdkconfig.h"
@@ -363,7 +364,8 @@ esp_err_t legs_play(const char *name, legs_opts_t opts)
     if (stat(path, &st) != 0) return ESP_ERR_NOT_FOUND;
     if (st.st_size < FRAME_LEN || st.st_size > MAX_FILE) return ESP_ERR_INVALID_SIZE;
 
-    uint8_t *buf = malloc(st.st_size);
+    uint8_t *buf = heap_caps_malloc(st.st_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) buf = malloc(st.st_size);
     if (!buf) return ESP_ERR_NO_MEM;
     FILE *fp = fopen(path, "rb");
     if (!fp) { free(buf); return ESP_ERR_NOT_FOUND; }

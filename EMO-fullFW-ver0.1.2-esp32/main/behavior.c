@@ -93,7 +93,7 @@ static void cliff_react(uint8_t mask)
 // Cliff / lift handling (thresholds from stock foot_cliff_calibrate: 30 % of floor reading).
 //  - 3 or 4 feet off the ground  -> picked up: kick legs (react_pick_up*), then put_down.
 //  - 1 or 2 feet over nothing    -> edge: cliff_L / cliff_R / cliff_B motion.
-static bool s_lifted, s_need_cal = true;
+static bool s_lifted, s_lift_limp, s_need_cal = true;
 static int64_t s_cal_at_us, s_lift_react_us;
 static uint8_t s_last_mask;
 
@@ -123,6 +123,12 @@ static void cliff_tick(void)
     int bits = __builtin_popcount(f.mask);
     if (bits >= 3) {
         if (!s_lifted) { s_lifted = true; s_lift_react_us = 0; set_mode("lifted"); }
+        if (s_voice_busy) {            // talking to Xiaozhi: stay still, motors off; kick only after the chat is over
+            if (!s_lift_limp) { go_limp(); s_lift_limp = true; ESP_LOGI(TAG, "lifted during chat: legs limp"); }
+            s_lift_react_us = 0;
+            return;
+        }
+        s_lift_limp = false;
         if (now >= s_lift_react_us) {
             s_lift_react_us = now + 3500000;
             legs_stop();
@@ -136,6 +142,14 @@ static void cliff_tick(void)
     if (s_lifted && f.mask == 0) {
         s_lifted = false;
         legs_stop();
+        if (s_voice_busy) {            // put down while chatting: just stand, no reaction
+            static const uint8_t home[4] = {90, 90, 90, 90};
+            s_lift_limp = false;
+            legs_pose(home, 400);
+            set_mode("idle");
+            s_need_cal = true; s_cal_at_us = now + 4000000;
+            return;
+        }
         play_mot((esp_random() & 1) ? "react_put_down_1" : "react_put_down_2");
         set_mode("idle");
         s_need_cal = true; s_cal_at_us = now + 4000000;

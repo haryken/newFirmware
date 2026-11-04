@@ -4,6 +4,8 @@
 #include "foot_cliff.h"
 #include "legs.h"
 #include "video.h"
+#include "microphone.h"
+#include "k210_uart.h"
 #include "k210_boot.h"
 #include "k210_link.h"
 #include <string.h>
@@ -152,6 +154,70 @@ static void game_fix_bugs(void)
     wait_motion_or_stop();
 }
 
+// Stock "hands up" game (gesture_gun_*). The robot raises its hands and waits for
+// a loud sound (clap / "bang!") from the player, measured on the K210 mic; then it
+// either dodges (~71 %) or gets to shoot back (~29 %, stock odds). With no sound
+// for GUN_WAIT_MS it just lowers its hands.
+#define GUN_WAIT_MS   20000
+static bool gun_wait_for_bang(void)
+{
+    // The hands-up face plays its own sound, which the mic hears: do not arm until
+    // the room has been quiet for 1.5 s in a row (max 12 s), else we trigger on ourselves.
+    wait_ms(1500);
+    if (s_stop) return false;
+    microphone_open();
+    uint16_t base = 0;
+    int quiet = 0;
+    int64_t lim = esp_timer_get_time() + 12000000;
+    while (!s_stop && quiet < 15 && esp_timer_get_time() < lim) {
+        microphone_stats_t st; microphone_get_stats(&st);
+        if (!st.open) microphone_open();
+        if (st.peak < 3500) { quiet++; if (st.peak > base) base = st.peak; }
+        else { quiet = 0; base = 0; }
+        wait_ms(100);
+    }
+    if (s_stop) return false;
+    uint32_t thr = (uint32_t)base * 3 / 2 + 3000;
+    if (thr < 7000) thr = 7000;
+    if (thr > 24000) thr = 24000;
+    ESP_LOGI("tricks", "gun: waiting for a bang (room peak %u, trigger > %u)", (unsigned)base, (unsigned)thr);
+    int64_t until = esp_timer_get_time() + (int64_t)GUN_WAIT_MS * 1000;
+    bool heard = false;
+    while (!s_stop && esp_timer_get_time() < until) {
+        microphone_stats_t st; microphone_get_stats(&st);
+        if (!st.open) microphone_open();                   // K210 VAD closed the window
+        if (st.peak > thr) { heard = true; ESP_LOGI("tricks", "gun: bang! peak=%u", (unsigned)st.peak); break; }
+        wait_ms(30);
+    }
+    microphone_mark_closed();
+    k210_uart_send_mode(K210_MODE_IDLE);                   // wake word armed again
+    k210_link_set_state(LINK_IDLE);
+    return heard;
+}
+
+static void game_gun(void)
+{
+    set_st("game", "gun", true);
+    bool ack = false;
+    video_play_face("gesture_gun_don't_move_start", 0, true, &ack);   // hands up
+    ESP_LOGI("tricks", "gun: hands-up face ack=%d", (int)ack);
+    bool bang = gun_wait_for_bang();
+    if (s_stop) return;
+    if (!bang) {                                          // nobody shot: lower the hands
+        play_mot("gesture_gun_end"); wait_motion_or_stop();
+        return;
+    }
+    if (esp_random() % 100 < 29) {
+        play_mot("gesture_gun");  wait_motion_or_stop();
+        if (s_stop) return;
+        play_mot("gesture_gun_stay"); wait_motion_or_stop();
+        if (s_stop) return;
+        play_mot("gesture_gun_end");  wait_motion_or_stop();
+    } else {
+        play_mot((esp_random() & 1) ? "gesture_gun_dodge1" : "gesture_gun_dodge2");
+        wait_motion_or_stop();
+    }
+}
 typedef struct {
     enum { JOB_CAMP, JOB_EXPLORE, JOB_GAME } kind;
     uint32_t seconds;
@@ -173,6 +239,7 @@ static void tricks_task(void *arg)
         else if (!strcmp(job.game, "ttt")) game_ttt();
         else if (!strcmp(job.game, "zombie")) game_zombie();
         else if (!strcmp(job.game, "fix_bugs")) game_fix_bugs();
+        else if (!strcmp(job.game, "gun")) game_gun();
         break;
     }
     s_task = NULL;
@@ -297,7 +364,7 @@ esp_err_t tricks_game_start(const char *game)
 {
     if (!game || !game[0]) return ESP_ERR_INVALID_ARG;
     if (strcmp(game, "rps") && strcmp(game, "ttt") &&
-        strcmp(game, "zombie") && strcmp(game, "fix_bugs"))
+        strcmp(game, "zombie") && strcmp(game, "fix_bugs") && strcmp(game, "gun"))
         return ESP_ERR_INVALID_ARG;
     job_t j = { .kind = JOB_GAME };
     strlcpy(j.game, game, sizeof(j.game));

@@ -363,8 +363,14 @@ static bool play_face_named(const char *face, char *msg, size_t msg_len)
     return ok;
 }
 
+static volatile bool s_mcp_local;   // running a deferred skill locally: nothing goes to the server
+static char s_pend_name[48];
+static char s_pend_args[200];
+static volatile bool s_pend;
+
 static void mcp_reply(cJSON *id, bool ok, const char *text)
 {
+    if (s_mcp_local) return;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "session_id", s_session_id);
     cJSON_AddStringToObject(root, "type", "mcp");
@@ -396,8 +402,8 @@ static void mcp_tools_list(cJSON *id)
         "\"reverse\":{\"type\":\"boolean\",\"description\":\"true = backward\"}}}},"
         "{\"name\":\"self.robot.turn\",\"description\":\"Turn in place (left if reverse=false).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"cycles\":{\"type\":\"number\"},\"reverse\":{\"type\":\"boolean\"}}}},"
-        "{\"name\":\"self.robot.sing_a_song\",\"description\":\"Sing a song / play a singing motion (stock: Sing a song).\",\"inputSchema\":"
-        "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":\"string\",\"description\":\"optional sings1_1.. or dance name\"}}}},"
+        "{\"name\":\"self.robot.sing_a_song\",\"description\":\"Sing a song: robot holds a microphone and sings (NOT a dance; use dance for that).\",\"inputSchema\":"
+        "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":\"string\",\"description\":\"optional sings1_1..sings1_5 or sings2_1..sings2_4\"}}}},"
         "{\"name\":\"self.robot.dance\",\"description\":\"Dance with music (stock: Dance / Let's dance).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":\"string\",\"description\":\"optional d1_EmoDance..d11_OceanBlue\"}}}},"
         "{\"name\":\"self.robot.look_around\",\"description\":\"Look around idle motion.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
@@ -418,6 +424,7 @@ static void mcp_tools_list(cJSON *id)
         "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"number\",\"description\":\"1..1800\"}},\"required\":[\"seconds\"]}},"
         "{\"name\":\"self.robot.explore\",\"description\":\"Gated explore walk (needs cliff sensor; not while docked).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"number\",\"description\":\"5..120, default 20\"}}}},"
+        "{\"name\":\"self.robot.hands_up\",\"description\":\"Hands-up shooting game (stock: Hands up / Don't move): robot raises its hands, then dodges or shoots.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
         "{\"name\":\"self.robot.play_game\",\"description\":\"Anim demo game: rps|ttt|zombie|fix_bugs (not full CV).\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"game\":{\"type\":\"string\"}},\"required\":[\"game\"]}},"
         "{\"name\":\"self.audio_speaker.set_volume\",\"description\":\"Set speaker volume 0-255 (stock ~104).\",\"inputSchema\":"
@@ -427,25 +434,54 @@ static void mcp_tools_list(cJSON *id)
         "{\"name\":\"self.audio_speaker.mute\",\"description\":\"Mute (stock: Be quiet).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}"
         "]";
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", s_session_id);
-    cJSON_AddStringToObject(root, "type", "mcp");
-    cJSON *payload = cJSON_CreateObject();
-    cJSON_AddStringToObject(payload, "jsonrpc", "2.0");
-    if (id) cJSON_AddItemToObject(payload, "id", cJSON_Duplicate(id, 1));
-    cJSON *result = cJSON_CreateObject();
-    cJSON *arr = cJSON_Parse(tools);
-    cJSON_AddItemToObject(result, "tools", arr ? arr : cJSON_CreateArray());
-    cJSON_AddItemToObject(payload, "result", result);
-    cJSON_AddItemToObject(root, "payload", payload);
-    char *s = cJSON_PrintUnformatted(root);
-    if (s) { ws_send_text(s); free(s); }
-    cJSON_Delete(root);
+    // Built as plain text (no cJSON tree): ~3 KB of tools would cost far more heap.
+    size_t cap = strlen(tools) + 192;
+    char *s = malloc(cap);
+    if (!s) { ESP_LOGE(TAG, "tools/list: no heap"); return; }
+    snprintf(s, cap,
+             "{\"session_id\":\"%s\",\"type\":\"mcp\",\"payload\":{\"jsonrpc\":\"2.0\",\"id\":%d,"
+             "\"result\":{\"tools\":%s}}}",
+             s_session_id, (id && cJSON_IsNumber(id)) ? id->valueint : 0, tools);
+    ws_send_text(s);
+    ESP_LOGI(TAG, "mcp tools/list sent (%u bytes)", (unsigned)strlen(s));
+    free(s);
 }
 
+static void mcp_initialize(cJSON *id)
+{
+    char s[320];
+    snprintf(s, sizeof(s),
+             "{\"session_id\":\"%s\",\"type\":\"mcp\",\"payload\":{\"jsonrpc\":\"2.0\",\"id\":%d,"
+             "\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},"
+             "\"serverInfo\":{\"name\":\"emo-bridge\",\"version\":\"0.1.2\"}}}}",
+             s_session_id, (id && cJSON_IsNumber(id)) ? id->valueint : 0);
+    ws_send_text(s);
+    ESP_LOGI(TAG, "mcp initialize answered");
+}
 static void mcp_call(cJSON *id, const char *name, cJSON *args)
 {
     if (!name) { mcp_reply(id, false, "no tool name"); return; }
+    ESP_LOGI(TAG, "mcp tools/call %s", name);
+
+    // Robot skills run only AFTER the conversation is over: Xiaozhi finishes
+    // speaking, the ws is closed, and only then the motion + music start, so
+    // the TTS cannot talk over the song.
+    if (!s_mcp_local && s_cmd_q && !strncmp(name, "self.robot.", 11) &&
+        strcmp(name, "self.robot.stop") && strcmp(name, "self.robot.play_face") &&
+        strcmp(name, "self.robot.timer")) {
+        snprintf(s_pend_name, sizeof(s_pend_name), "%s", name);
+        s_pend_args[0] = 0;
+        if (args) {
+            char *as = cJSON_PrintUnformatted(args);
+            if (as) { snprintf(s_pend_args, sizeof(s_pend_args), "%s", as); free(as); }
+        }
+        s_pend = true;
+        mcp_reply(id, true, "ok, the robot will do it as soon as this chat ends");
+        xz_cmd_t c = XZ_CMD_SKILL_HOME;
+        xQueueSend(s_cmd_q, &c, 0);
+        ESP_LOGI(TAG, "skill %s deferred until the chat is over", name);
+        return;
+    }
     bool ok = false;
     char msg[96] = "ok";
 
@@ -471,9 +507,8 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
             cJSON *w = cJSON_GetObjectItem(args, "which");
             if (cJSON_IsString(w) && w->valuestring[0]) n = w->valuestring;
         }
-        // Prefer dance-with-music (reliable media); fall back to sings* clips.
-        if (!n) n = (esp_random() & 1) ? pick_str(k_dances, sizeof(k_dances) / sizeof(k_dances[0]))
-                                       : pick_str(k_sings, sizeof(k_sings) / sizeof(k_sings[0]));
+        // Stock "Sing a song": sings1_*/sings2_* (microphone face + song), never a dance.
+        if (!n) n = pick_str(k_sings, sizeof(k_sings) / sizeof(k_sings[0]));
         ok = play_mot(n, msg, sizeof(msg));
     } else if (!strcmp(name, "self.robot.dance")) {
         const char *n = NULL;
@@ -576,6 +611,9 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
         else if (e == ESP_ERR_INVALID_STATE) strcpy(msg, "explore busy or docked");
         else if (ok) snprintf(msg, sizeof(msg), "explore %us", (unsigned)sec);
         else strcpy(msg, "explore failed");
+    } else if (!strcmp(name, "self.robot.hands_up")) {
+        ok = (tricks_game_start("gun") == ESP_OK);
+        snprintf(msg, sizeof(msg), ok ? "hands up game" : "game busy/failed");
     } else if (!strcmp(name, "self.robot.play_game")) {
         const char *g = NULL;
         if (args) {
@@ -602,15 +640,8 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
         mcp_reply(id, false, "unknown tool");
         return;
     }
+    ESP_LOGI(TAG, "mcp %s -> ok=%d '%s' (heap=%u)", name, (int)ok, msg, (unsigned)esp_get_free_internal_heap_size());
     mcp_reply(id, ok, msg);
-    // Every robot skill ends the conversation (stock: one command per wake word).
-    // Kept open: stop, play_face, timer and the volume tools.
-    if (ok && !strncmp(name, "self.robot.", 11) && strcmp(name, "self.robot.stop") &&
-        strcmp(name, "self.robot.play_face") && strcmp(name, "self.robot.timer") && s_cmd_q) {
-        xz_cmd_t c = XZ_CMD_SKILL_HOME;
-        xQueueSend(s_cmd_q, &c, 0);
-        ESP_LOGI(TAG, "skill %s started -> ending conversation", name);
-    }
 }
 
 static void handle_mcp(cJSON *payload)
@@ -619,8 +650,11 @@ static void handle_mcp(cJSON *payload)
     cJSON *method = cJSON_GetObjectItem(payload, "method");
     cJSON *id = cJSON_GetObjectItem(payload, "id");
     if (!cJSON_IsString(method)) return;
+    ESP_LOGI(TAG, "mcp rx method=%s", method->valuestring);
+    if (!strcmp(method->valuestring, "initialize")) { mcp_initialize(id); return; }
     if (!strcmp(method->valuestring, "tools/list") ||
         !strcmp(method->valuestring, "notifications/initialized")) {
+        ESP_LOGI(TAG, "mcp %s", method->valuestring);
         if (!strcmp(method->valuestring, "tools/list")) mcp_tools_list(id);
         return;
     }
@@ -1489,12 +1523,36 @@ static bool on_speaker_idle(void)
 // wake the robot to talk after the skill ends.
 static void skill_home_work(void)
 {
-    vTaskDelay(pdMS_TO_TICKS(1200));            // tool result -> server -> TTS reply
-    for (int i = 0; i < 80 && (s_speaking || s_odec_pending || speaker_busy()); i++)
-        vTaskDelay(pdMS_TO_TICKS(100));         // up to 8 s of "ok!"
+    // 1) let Xiaozhi finish talking (also the reply it makes after the tool result)
+    int quiet_ms = 0;
+    for (int i = 0; i < 300 && quiet_ms < 2500; i++) {          // 30 s max
+        if (s_speaking || s_odec_pending || speaker_busy()) quiet_ms = 0;
+        else quiet_ms += 100;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    // 2) conversation over: close the ws, mic idle, wake word armed
     s_home_quiet = true;
     go_home_work();
     s_home_quiet = false;
+    // K210 was left in speaker mode by the TTS: bring it back to a state that
+    // answers (same sequence as recover_work) or the song's face/mp3 gets no ACK.
+    speaker_end_handoff();
+    k210_uart_send_mode(K210_MODE_IDLE);
+    k210_link_set_state(LINK_IDLE);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    bool alive = k210_link_ping(400);
+    ESP_LOGI(TAG, "skill: K210 after IDLE %s", alive ? "ALIVE" : "DEAD -> recover");
+    if (!alive) k210_link_recover_after_spk();
+    microphone_mark_closed();
+    // 3) now the skill owns the speaker/face
+    if (s_pend) {
+        s_pend = false;
+        cJSON *a = s_pend_args[0] ? cJSON_Parse(s_pend_args) : NULL;
+        s_mcp_local = true;
+        mcp_call(NULL, s_pend_name, a);
+        s_mcp_local = false;
+        if (a) cJSON_Delete(a);
+    }
 }
 static void session_task(void *arg)
 {
@@ -1597,7 +1655,7 @@ void xiaozhi_start(void)
 
     // Opus needs ~20 KB stack — put it in PSRAM so internal heap stays for TLS.
     const uint32_t enc_stack_bytes = 24576;
-#if CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#if CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY || CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
     StackType_t *enc_stack = heap_caps_malloc(enc_stack_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     StaticTask_t *enc_tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (enc_stack && enc_tcb) {
