@@ -422,6 +422,7 @@ static void mcp_tools_list(cJSON *id)
         "{\"name\":\"self.robot.roll_dice\",\"description\":\"Roll a dice (xuc xac, do xuc xac, tung xuc xac).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
         "{\"name\":\"self.robot.fight\",\"description\":\"Fight with a weapon (danh nhau, vu khi): boomerang, radish knife, slingshot, water bubble gun.\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"weapon\":{\"type\":\"string\",\"description\":\"optional: boomerang|radish|slingshot|bubble\"}}}},"
+        "{\"name\":\"self.robot.daily\",\"description\":\"Daily life skill (cuoc song hang ngay / sinh hoat): randomly do one stock Daily routine — brush teeth, shower, meditation, boxing, eating, cook, braid, watch TV, read, teatime, painting, juggling, hypnosis, UVA, banana, aibi, ...\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
         "{\"name\":\"self.robot.exercise\",\"description\":\"Workout / fitness with the robot (tap the duc, tap gym): warm-up, aerobic, core, power, relax.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
         "{\"name\":\"self.robot.drive\",\"description\":\"Drive a vehicle (lai xe): bicycle, car or ship.\",\"inputSchema\":"
         "{\"type\":\"object\",\"properties\":{\"vehicle\":{\"type\":\"string\",\"description\":\"optional: bicycle|car|ship\"}}}},"
@@ -654,13 +655,16 @@ static void mcp_call(cJSON *id, const char *name, cJSON *args)
     } else if (!strcmp(name, "self.robot.camping") || !strcmp(name, "self.robot.fireworks") ||
                !strcmp(name, "self.robot.spray_paint") || !strcmp(name, "self.robot.roll_dice") ||
                !strcmp(name, "self.robot.fight") || !strcmp(name, "self.robot.exercise") ||
-               !strcmp(name, "self.robot.drive") || !strcmp(name, "self.robot.play_instruments")) {
+               !strcmp(name, "self.robot.drive") || !strcmp(name, "self.robot.play_instruments") ||
+               !strcmp(name, "self.robot.daily") || !strcmp(name, "self.robot.daily_activity")) {
         // stock profile "shows" (tricks.c show_*): optional free-text sub-choice after ':'
+        // self.robot.daily always picks a random Daily_* routine (no arg).
         static const struct { const char *tool, *show, *key; } k_shows[] = {
             { "self.robot.camping", "camp", "activity" }, { "self.robot.fireworks", "fireworks", NULL },
             { "self.robot.spray_paint", "spray", NULL }, { "self.robot.roll_dice", "dice", NULL },
             { "self.robot.fight", "fight", "weapon" }, { "self.robot.exercise", "fit", NULL },
             { "self.robot.drive", "drive", "vehicle" }, { "self.robot.play_instruments", "band", "instrument" },
+            { "self.robot.daily", "daily", NULL }, { "self.robot.daily_activity", "daily", NULL },
         };
         char game[32] = "";
         for (size_t i = 0; i < sizeof(k_shows) / sizeof(k_shows[0]); i++) {

@@ -20,6 +20,7 @@ idf_component_register(
         "behavior.c"
         "tricks.c"
         "anim.c"
+        "daily.c"
         # network
         "net.c"
         "captive_dns.c"
@@ -29,7 +30,7 @@ idf_component_register(
         "http_server.c"
         "rest_api.c"
     INCLUDE_DIRS "."
-    EMBED_TXTFILES "web/index.html" "web/style.css" "web/app.js"
+    EMBED_TXTFILES "web/index.html" "web/style.css" "web/app.js" "web/i18n.js"
     REQUIRES
         nvs_flash
         esp_driver_gpio

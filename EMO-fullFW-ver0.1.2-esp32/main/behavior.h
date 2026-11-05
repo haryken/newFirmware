@@ -36,6 +36,7 @@ bool behavior_docked(void);
 
 // Pause wander/idle faces while Xiaozhi is listening/speaking.
 void behavior_set_voice_busy(bool busy);
+bool behavior_voice_busy(void);
 
 #ifdef __cplusplus
 }

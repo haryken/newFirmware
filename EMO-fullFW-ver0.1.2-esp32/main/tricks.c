@@ -228,6 +228,49 @@ static void show_band(const char *arg)
     snprintf(n, sizeof(n), "emo_%s_eixt1", inst[pick]); show_step(n);
 }
 
+// A stock "Daily_*" routine: <base>_start, then the <base>_loopN clips (random order, 1-2
+// rounds, at most ~70 s), then <base>_end. `arg` picks the routine (case-insensitive, partial
+// match: "teeth", "shower", ...); NULL/unknown = random.
+static void show_daily(const char *arg)
+{
+    static const char *k_names[] = {
+        "Boxing", "Dumbbell", "Eating", "Newspaper", "Work", "Work_stamp", "Teatime", "Blending", "Painting",
+        "Watch_tv", "Read_a_book", "Brush_teeth", "Braid", "Cook", "Wipe_glass", "lightbulb", "Juggling",
+        "Magic_cube", "shower", "meditation", "hypnosis", "UVA", "poop", "banana", "aibi", "fried_chicken",
+        "Eating2", "Eating3",
+    };
+    const int n = sizeof(k_names) / sizeof(k_names[0]);
+    const char *pick = NULL;
+    if (arg && arg[0]) {
+        for (int i = 0; i < n && !pick; i++) if (!strcasecmp(arg, k_names[i])) pick = k_names[i];
+        for (int i = 0; i < n && !pick; i++) if (strcasestr(k_names[i], arg)) pick = k_names[i];
+    }
+    if (!pick) pick = k_names[rnd(0, n - 1)];
+    strlcpy(s_show_mode, "daily", sizeof(s_show_mode));
+    char base[48], nm[64];
+    snprintf(base, sizeof(base), "Daily_%s", pick);
+    ESP_LOGI("tricks", "daily routine %s", base);
+    int64_t t0 = esp_timer_get_time();
+    if (anim_exists(base)) { show_step(base); return; }            // single clip (fried chicken)
+    snprintf(nm, sizeof(nm), "%s_start", base);
+    if (anim_exists(nm)) show_step(nm);
+    int loops[8], nl = 0;
+    for (int k = 1; k <= 8; k++) {
+        snprintf(nm, sizeof(nm), "%s_loop%d", base, k);
+        if (anim_exists(nm)) loops[nl++] = k;
+    }
+    for (int round = 0, rounds = rnd(1, 2); round < rounds && nl && !s_stop; round++) {
+        for (int i = nl - 1; i > 0; i--) { int j = rnd(0, i), t = loops[i]; loops[i] = loops[j]; loops[j] = t; }
+        for (int i = 0; i < nl && !s_stop; i++) {
+            if (esp_timer_get_time() - t0 > 70000000LL) break;
+            snprintf(nm, sizeof(nm), "%s_loop%d", base, loops[i]);
+            show_step(nm);
+        }
+    }
+    snprintf(nm, sizeof(nm), "%s_end", base);
+    if (anim_exists(nm)) show_step(nm);
+}
+
 static void camping_body(void)
 {
     set_st("camping", "running", true);
@@ -431,6 +474,7 @@ static void tricks_task(void *arg)
             else if (!strcmp(g, "drive")) show_drive(arg);
             else if (!strcmp(g, "camp")) show_camp(arg);
             else if (!strcmp(g, "band")) show_band(arg);
+            else if (!strcmp(g, "daily")) show_daily(arg);
         }
         break;
     }
@@ -557,7 +601,7 @@ esp_err_t tricks_game_start(const char *game)
     if (!game || !game[0]) return ESP_ERR_INVALID_ARG;
     if (strcmp(game, "rps") && strcmp(game, "ttt") &&
         strcmp(game, "zombie") && strcmp(game, "fix_bugs") && strcmp(game, "gun")) {
-        static const char *k_shows[] = { "fireworks", "spray", "dice", "fight", "fit", "drive", "camp", "band" };
+        static const char *k_shows[] = { "fireworks", "spray", "dice", "fight", "fit", "drive", "camp", "band", "daily" };
         bool okk = false;
         for (size_t i = 0; i < sizeof(k_shows) / sizeof(k_shows[0]); i++) {
             size_t n = strlen(k_shows[i]);

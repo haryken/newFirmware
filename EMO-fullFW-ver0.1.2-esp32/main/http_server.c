@@ -14,6 +14,8 @@ extern const char style_css_start[]  asm("_binary_style_css_start");
 extern const char style_css_end[]    asm("_binary_style_css_end");
 extern const char app_js_start[]     asm("_binary_app_js_start");
 extern const char app_js_end[]       asm("_binary_app_js_end");
+extern const char i18n_js_start[]    asm("_binary_i18n_js_start");
+extern const char i18n_js_end[]      asm("_binary_i18n_js_end");
 
 static esp_err_t send_static(httpd_req_t *r, const char *type, const char *start, const char *end)
 {
@@ -23,6 +25,7 @@ static esp_err_t send_static(httpd_req_t *r, const char *type, const char *start
 static esp_err_t get_index(httpd_req_t *r) { return send_static(r, "text/html", index_html_start, index_html_end); }
 static esp_err_t get_css(httpd_req_t *r)   { return send_static(r, "text/css", style_css_start, style_css_end); }
 static esp_err_t get_js(httpd_req_t *r)    { return send_static(r, "application/javascript", app_js_start, app_js_end); }
+static esp_err_t get_i18n(httpd_req_t *r)  { return send_static(r, "application/javascript", i18n_js_start, i18n_js_end); }
 
 // SoftAP captive probes (Android/iOS/Windows) → open config UI, Xiaozhi-style.
 static esp_err_t captive_redirect(httpd_req_t *r)
@@ -42,6 +45,7 @@ static void register_pages(httpd_handle_t srv)
         { .uri = "/",          .method = HTTP_GET, .handler = get_index },
         { .uri = "/style.css", .method = HTTP_GET, .handler = get_css },
         { .uri = "/app.js",    .method = HTTP_GET, .handler = get_js },
+        { .uri = "/i18n.js",   .method = HTTP_GET, .handler = get_i18n },
     };
     for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
         esp_err_t e = httpd_register_uri_handler(srv, &pages[i]);

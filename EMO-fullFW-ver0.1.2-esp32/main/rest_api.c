@@ -11,6 +11,7 @@
 #include "battery.h"
 #include "behavior.h"
 #include "tricks.h"
+#include "daily.h"
 #include "k210_file.h"
 #include "esp_heap_caps.h"
 #include "legs.h"
@@ -540,6 +541,90 @@ static esp_err_t post_tricks(httpd_req_t *r)
     return httpd_resp_sendstr(r, "{\"ok\":true}");
 }
 
+// ---- /api/daily: schedule + activity catalog ----
+static esp_err_t get_daily(httpd_req_t *r)
+{
+    daily_status_t d; daily_get_status(&d);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "enabled", d.enabled);
+    cJSON_AddBoolToObject(root, "synced", d.synced);
+    cJSON_AddNumberToObject(root, "hhmm", d.hhmm);
+    cJSON_AddNumberToObject(root, "fake", d.fake_hhmm);
+    cJSON_AddNumberToObject(root, "tz", d.tz_hours);
+    cJSON_AddStringToObject(root, "last", d.last);
+    cJSON_AddStringToObject(root, "next", d.next);
+    cJSON_AddBoolToObject(root, "legs_ok", legs_motion_allowed());
+    cJSON *arr = cJSON_AddArrayToObject(root, "slots");
+    for (int i = 0; i < d.nslots; i++) {
+        cJSON *s = cJSON_CreateObject();
+        cJSON_AddNumberToObject(s, "start", d.slots[i].start);
+        cJSON_AddNumberToObject(s, "end", d.slots[i].end);
+        cJSON_AddStringToObject(s, "a", d.slots[i].a);
+        cJSON_AddStringToObject(s, "b", d.slots[i].b);
+        cJSON_AddBoolToObject(s, "enabled", d.slots[i].enabled != 0);
+        cJSON_AddItemToArray(arr, s);
+    }
+    cJSON *acts = cJSON_AddArrayToObject(root, "activities");
+    for (const char *const *p = daily_activity_names(); *p; p++) cJSON_AddItemToArray(acts, cJSON_CreateString(*p));
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) { httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, out);
+    free(out);
+    return e;
+}
+
+static esp_err_t post_daily(httpd_req_t *r)
+{
+    char *body = read_body(r, NULL);
+    if (!body) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body"); return ESP_FAIL; }
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json"); return ESP_FAIL; }
+    cJSON *act = cJSON_GetObjectItem(j, "action");
+    if (cJSON_IsString(act) && !strcmp(act->valuestring, "reset")) daily_reset_schedule();
+    cJSON *en = cJSON_GetObjectItem(j, "enable");
+    cJSON *tz = cJSON_GetObjectItem(j, "tz");
+    cJSON *fk = cJSON_GetObjectItem(j, "fake");
+    if (cJSON_IsBool(en)) daily_set_enabled(cJSON_IsTrue(en));
+    if (cJSON_IsNumber(tz)) daily_set_tz((int)tz->valuedouble);
+    if (cJSON_IsNumber(fk)) daily_set_fake_hhmm((int)fk->valuedouble);
+    cJSON *slots = cJSON_GetObjectItem(j, "slots");
+    if (cJSON_IsArray(slots)) {
+        daily_slot_t tmp[DAILY_MAX_SLOTS];
+        int n = cJSON_GetArraySize(slots);
+        if (n > DAILY_MAX_SLOTS) n = DAILY_MAX_SLOTS;
+        memset(tmp, 0, sizeof(tmp));
+        for (int i = 0; i < n; i++) {
+            cJSON *s = cJSON_GetArrayItem(slots, i);
+            cJSON *st = cJSON_GetObjectItem(s, "start");
+            cJSON *en2 = cJSON_GetObjectItem(s, "end");
+            cJSON *a = cJSON_GetObjectItem(s, "a");
+            cJSON *b = cJSON_GetObjectItem(s, "b");
+            cJSON *on = cJSON_GetObjectItem(s, "enabled");
+            if (cJSON_IsNumber(st)) tmp[i].start = (uint16_t)st->valuedouble;
+            if (cJSON_IsNumber(en2)) tmp[i].end = (uint16_t)en2->valuedouble;
+            if (cJSON_IsString(a)) strlcpy(tmp[i].a, a->valuestring, sizeof(tmp[i].a));
+            if (cJSON_IsString(b)) strlcpy(tmp[i].b, b->valuestring, sizeof(tmp[i].b));
+            tmp[i].enabled = cJSON_IsFalse(on) ? 0 : 1;
+        }
+        if (daily_set_schedule(tmp, n) != ESP_OK) {
+            cJSON_Delete(j);
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "bad schedule");
+            return ESP_FAIL;
+        }
+    }
+    cJSON *play = cJSON_GetObjectItem(j, "play");
+    if (cJSON_IsString(play) && play->valuestring[0]) {
+        char g[40];
+        snprintf(g, sizeof(g), "daily:%s", play->valuestring);
+        tricks_game_start(g);
+    }
+    cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, "{\"ok\":true}");
+}
+
 // ---- /api/xiaozhi: GET pair info; POST {"action":"pair"} refreshes OTA activation ----
 static esp_err_t get_xiaozhi(httpd_req_t *r)
 {
@@ -644,6 +729,8 @@ void rest_api_register(httpd_handle_t srv)
         { .uri = "/api/motion",   .method = HTTP_POST, .handler = post_motion },
         { .uri = "/api/tricks",   .method = HTTP_GET,  .handler = get_tricks },
         { .uri = "/api/tricks",   .method = HTTP_POST, .handler = post_tricks },
+        { .uri = "/api/daily",    .method = HTTP_GET,  .handler = get_daily },
+        { .uri = "/api/daily",    .method = HTTP_POST, .handler = post_daily },
         { .uri = "/api/power",    .method = HTTP_POST, .handler = post_power },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {

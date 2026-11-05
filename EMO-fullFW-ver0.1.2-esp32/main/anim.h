@@ -15,6 +15,9 @@ extern "C" {
 // Returns ESP_ERR_NOT_FOUND if the name is in neither table.
 esp_err_t anim_play(const char *name, uint32_t *dur_ms);
 
+// True if `name` is an animation or a media clip in the table.
+bool anim_exists(const char *name);
+
 #ifdef __cplusplus
 }
 #endif

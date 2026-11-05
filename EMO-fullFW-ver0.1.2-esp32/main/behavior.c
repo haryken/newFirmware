@@ -33,6 +33,7 @@ static int64_t s_explore_next_us;
 static bool s_petting;
 static int64_t s_pet_end_us;
 static volatile bool s_voice_busy;
+bool behavior_voice_busy(void) { return s_voice_busy; }
 static volatile bool s_touch_wake;   // touch while docked: wake from sleep face
 
 static const char *IDLE_FACES[] = {
@@ -123,12 +124,9 @@ static void cliff_tick(void)
 
     int bits = __builtin_popcount(f.mask);
     if (bits >= 3) {
+        // Lift kick always runs, including during Xiaozhi chat: chat freezes wander/idle faces,
+        // but picking the robot up must still make it struggle (stock feel).
         if (!s_lifted) { s_lifted = true; s_lift_react_us = 0; set_mode("lifted"); }
-        if (s_voice_busy) {            // talking to Xiaozhi: stay still, motors off; kick only after the chat is over
-            if (!s_lift_limp) { go_limp(); s_lift_limp = true; ESP_LOGI(TAG, "lifted during chat: legs limp"); }
-            s_lift_react_us = 0;
-            return;
-        }
         s_lift_limp = false;
         if (now >= s_lift_react_us) {
             s_lift_react_us = now + 3500000;
@@ -136,21 +134,13 @@ static void cliff_tick(void)
             char nm[24];
             snprintf(nm, sizeof(nm), "react_pick_up%u", (unsigned)(1 + esp_random() % 5));
             play_mot(nm);
-            ESP_LOGW(TAG, "lifted -> %s", nm);
+            ESP_LOGW(TAG, "lifted%s -> %s", s_voice_busy ? " (chat)" : "", nm);
         }
         return;
     }
     if (s_lifted && f.mask == 0) {
         s_lifted = false;
         legs_stop();
-        if (s_voice_busy) {            // put down while chatting: just stand, no reaction
-            static const uint8_t home[4] = {90, 90, 90, 90};
-            s_lift_limp = false;
-            legs_pose(home, 400);
-            set_mode("idle");
-            s_need_cal = true; s_cal_at_us = now + 4000000;
-            return;
-        }
         play_mot((esp_random() & 1) ? "react_put_down_1" : "react_put_down_2");
         set_mode("idle");
         s_need_cal = true; s_cal_at_us = now + 4000000;
@@ -295,13 +285,12 @@ static void dock_tick(void)
     bool changed = s_st.docked != dock;
     s_st.docked = dock;
     portEXIT_CRITICAL(&s_mux);
+    legs_set_motion_allowed(!dock);          // charger: face+sound only — leg kicks tip the robot
     if (changed) {
         if (dock) {
-            // Stand still in the waiting pose, go limp after DOCK_LIMP_MS.
-            ESP_LOGI(TAG, "docked: waiting pose, limp in %d s", CONFIG_EMO_DOCK_LIMP_S);
+            // No standing pose on the charger — any kick/pose can tip the robot over.
+            ESP_LOGI(TAG, "docked: legs locked (face/sound only), limp in %d s", CONFIG_EMO_DOCK_LIMP_S);
             legs_stop();
-            const uint8_t p[4] = { 90, 90, 90, 90 };
-            legs_pose(p, 500);
             s_dock_since_us = now;
             s_limp_done = false;
             s_sleeping = false;

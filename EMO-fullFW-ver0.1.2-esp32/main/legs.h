@@ -68,9 +68,14 @@ typedef struct {
 void  legs_set_default_speed(float speed);
 float legs_default_speed(void);
 
+// When false (on charger / docked), legs_play / legs_gait / legs_pose refuse to move —
+// face + sound still work. Default true until behavior reports dock state.
+void legs_set_motion_allowed(bool allowed);
+bool legs_motion_allowed(void);
+
 // Play /spiffs/mot/<name>.mot in a background task (stops a running motion first).
 // ESP_ERR_NOT_FOUND: no such file. ESP_ERR_INVALID_ARG: bad name.
-// ESP_ERR_INVALID_SIZE: file has no valid frames. ESP_ERR_INVALID_STATE: no SPIFFS.
+// ESP_ERR_INVALID_SIZE: file has no valid frames. ESP_ERR_INVALID_STATE: no SPIFFS / docked.
 esp_err_t legs_play(const char *name, legs_opts_t opts);
 
 // Procedural gait (the stock firmware's Otto-style oscillator, used by the .mot

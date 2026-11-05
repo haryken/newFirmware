@@ -21,6 +21,7 @@
 #include "legs.h"
 #include "behavior.h"
 #include "tricks.h"
+#include "daily.h"
 #include "nvs_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -88,6 +89,7 @@ void app_main(void)
         ESP_LOGE(TAG, "K210 link not started: %s", esp_err_to_name(kerr));
     }
     tricks_init();
+    daily_init();                      // SNTP + time-of-day routines (stock Daily_*)
     behavior_start();                  // idle faces, cliff interrupt, petting, dock hold
     ESP_LOGI(TAG, "EMO-Bridge up. Web http://<ip>:8080 — voice_mode emoa|xiaozhi.");
 

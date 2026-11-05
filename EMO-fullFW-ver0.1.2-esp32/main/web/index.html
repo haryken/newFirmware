@@ -1,167 +1,197 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EMO Bridge</title>
+<title>EMO · Cài đặt</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <span id="link" class="dot"></span>
-  <h1>EMO Bridge</h1>
-  <span id="ip" class="pill" style="margin-left:auto"></span>
-</header>
-<main>
-
-  <div class="card" id="wifi_card">
-    <h2>Wi-Fi</h2>
-    <small id="wifi_hint">Chọn mạng nhà bạn, nhập mật khẩu, rồi bấm Lưu. Robot sẽ khởi động lại và nối STA.</small>
-    <div class="btns" style="margin-top:10px">
-      <button type="button" id="wifi_scan">Quét mạng</button>
-      <span id="wifi_scan_st" class="pill"></span>
-    </div>
-    <div id="wifi_list" class="wifi-list"></div>
-    <div class="row" style="margin-top:12px">
-      <div><label>SSID</label><input id="wifi_ssid" placeholder="tên Wi-Fi" autocomplete="off"></div>
-      <div><label>Mật khẩu</label><input id="wifi_pass" type="password" placeholder="mật khẩu Wi-Fi" autocomplete="off"></div>
-    </div>
-    <div class="btns"><button type="button" id="wifi_save">Lưu &amp; kết nối</button><span id="wifi_saved" class="pill"></span></div>
-  </div>
-
-  <div class="card">
-    <h2>Status</h2>
-    <div class="bat">
-      <div class="shell"><div class="fill" id="batfill"></div></div>
-      <div><b id="batpct">—</b><small id="batinfo">battery</small></div>
-    </div>
-    <div class="grid" id="stat"></div>
-  </div>
-
-  <div class="card">
-    <h2>Audio test</h2>
-    <small>Mic level is live from the robot. “Record 3 s” captures the robot mic and opens it as a WAV in a new tab.</small>
-    <div class="meter" style="margin:12px 0"><i id="bar"></i></div>
-    <div class="btns">
-      <button id="tone">Test tone on robot</button>
-      <button id="micwav" class="ghost">Record 3 s on robot → WAV</button>
-    </div>
-  </div>
-
-  <div class="card" id="walk_card">
-    <h2>Walk test</h2>
-    <small>Nút test gait (stock explore_*). Tắt Docked trước. Nếu chân không nhúc → lỗi driver servo, không phải thiếu nút.</small>
-    <div class="walkpad">
-      <button type="button" class="ghost" id="walk_left">← Trái</button>
-      <button type="button" id="walk_fwd">↑ Tiến</button>
-      <button type="button" class="ghost" id="walk_right">Phải →</button>
-      <button type="button" class="ghost" id="walk_back">↓ Lùi</button>
-    </div>
-    <div class="btns">
-      <button type="button" id="walk_explore">Explore 20s</button>
-      <button type="button" class="ghost" id="walk_stop">Stop</button>
-      <button type="button" class="ghost" id="walk_wiggle">Wiggle servo</button>
-      <span id="walk_st" class="pill"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Motion</h2>
-    <small>Plays the stock <code>.mot</code> files from <code>/spiffs/mot</code> on the four leg servos. Walk and turn frames
-    run the stock gait oscillator; frames of other stock generators are held (shown as "gait frames").</small>
-    <div class="row" style="margin-top:12px">
-      <div><label>Motion file</label><select id="motsel"></select></div>
-      <div><label>Speed &times; (empty = default) &middot; options</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="motspeed" placeholder="default" style="width:80px">
-        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="motfit" style="width:auto"> fit to the music</label>
-        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="motmedia" checked style="width:auto"> face + music on the K210</label></div></div>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <div><label>Pose: left legs, right legs, left foot, right foot (deg) &middot; time (ms)</label>
-        <div style="display:flex;gap:6px"><input id="p0" value="90"><input id="p1" value="90"><input id="p2" value="90"><input id="p3" value="90"><input id="pms" value="500"></div></div>
-    </div>
-    <div class="btns">
-      <button id="motplay">Play</button>
-      <button id="motloop" class="ghost">Play in loop</button>
-      <button id="motstop" class="ghost">Stop</button>
-      <button id="motpose" class="ghost">Go to pose</button>
-      <button id="motrel" class="ghost">Servos off</button>
-      <span id="motst" class="pill"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Robot controls</h2>
-    <small>Every K210 command from <code>uart_commands.md</code>, sent as-is over UART1. Fields next to a button are the
-    parameters (number or text); the reply shows the exact bytes sent and whether the K210 ACKed. Same thing over HTTP:
-    <code>POST /api/controls {"action":"anim_stay_wink_1"}</code>.</small>
-    <div class="ctl" id="controls"></div>
-    <div id="ctlres"></div>
-  </div>
-
-  <div class="card" id="xz_card">
-    <h2>Xiaozhi pair</h2>
-    <small>1) Chọn Voice backend = Xiaozhi + Save. 2) Robot phải vào Wi‑Fi nhà (có internet). 3) Bấm <b>Lấy mã pair</b>. 4) Vào <a href="https://xiaozhi.me" target="_blank" rel="noopener">xiaozhi.me</a> → thêm thiết bị → nhập mã 6 số.</small>
-    <div class="xz-code" id="xz_code">————</div>
-    <div class="grid" style="margin-top:10px">
-      <b>Device-Id (MAC)</b><span id="xz_mac">—</span>
-      <b>Client-Id</b><span id="xz_client" style="word-break:break-all">—</span>
-      <b>Trạng thái</b><span id="xz_st">—</span>
-    </div>
-    <div class="btns">
-      <button type="button" id="xz_pair">Lấy mã pair</button>
-      <button type="button" class="ghost" id="xz_copy">Copy mã</button>
-      <button type="button" class="ghost" id="xz_dismiss">Đã pair — ẩn mã trên mặt</button>
-      <span id="xz_msg" class="pill"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Configuration</h2>
-    <div class="row">
-      <div><label>Voice backend</label>
-        <select id="voice_mode">
-          <option value="emoa">EMOA (local-brain TCP)</option>
-          <option value="xiaozhi">Xiaozhi (OTA + WebSocket)</option>
-        </select>
+<header class="site-header">
+  <div class="header-brand-row">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">🤖</div>
+      <div class="hbatt" id="hbatt" title="Pin">
+        <div class="shell"><div class="fill" id="batfill"></div></div>
+        <span id="batpct">—</span>
       </div>
-      <div><label>Default motion speed, % of file timing</label><input id="motion_speed" placeholder="100"></div>
     </div>
-    <div class="row">
-      <div><label>EMOA server IP</label><input id="host_ip" placeholder="192.168.137.1"></div>
-      <div><label>EMOA port</label><input id="host_port" placeholder="7007"></div>
-    </div>
-    <div class="row">
-      <div><label>Xiaozhi OTA URL</label><input id="ota_url" placeholder="https://api.tenclass.net/xiaozhi/ota/"></div>
-      <div><label>Xiaozhi WS URL (optional override)</label><input id="ws_url" placeholder="ws://192.168.x.x:8000/xiaozhi/v1/"></div>
-    </div>
-    <div class="row">
-      <div><label>Xiaozhi token (optional)</label><input id="xz_token" type="password" placeholder="(unchanged)"></div>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="docked" style="width:auto"> Docked / stand still (no explore). Uncheck to walk.</label></div>
-      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="explore_enable" checked style="width:auto"> Auto explore when not docked — put on flat floor, feet free of charger</label></div>
-    </div>
-    <div class="row">
-      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="idle_faces" checked style="width:auto"> Idle face blink / stay_*</label></div>
-      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="cliff_enable" checked style="width:auto"> Cliff interrupt while walking</label></div>
-    </div>
-    <div class="row">
-      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="petting_enable" checked style="width:auto"> Head petting (touch pads)</label></div>
-      <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="yolo_react" checked style="width:auto"> YOLO → see_EMO face</label></div>
-    </div>
-    <div class="btns"><button id="save">Save</button><span id="saved" class="pill"></span></div>
-    <small>Open this page at <code>http://&lt;robot-ip&gt;:8080</code> (shown on the face at boot).
-    Wi-Fi changes apply at the next boot; behaviour toggles apply immediately after Save.
-    Server → robot playback: <code>POST http://&lt;robot-ip&gt;:8080/api/play_pcm</code>.</small>
+    <span id="link" class="dot" title="K210"></span>
+  </div>
+  <div class="header-title-row">
+    <h1 data-i18n="header.title">EMO · Cài đặt</h1>
+    <label class="ui-lang-wrap" for="uiLangSelect">
+      <span class="ui-lang-label" data-i18n="lang.label">Ngôn ngữ</span>
+      <select id="uiLangSelect" aria-label="Language">
+        <option value="vi">Tiếng Việt</option>
+        <option value="en">English</option>
+        <option value="it">Italiano</option>
+        <option value="zh">中文</option>
+      </select>
+    </label>
+  </div>
+  <div class="pill" id="ip" style="margin-top:6px"></div>
+</header>
+
+<nav class="site-nav" aria-label="Sections">
+  <div class="tabs" role="tablist">
+    <button type="button" class="active" data-target="#wifi" data-i18n="nav.wifi">📶 Wi‑Fi</button>
+    <button type="button" data-target="#status" data-i18n="nav.status">📊 Trạng thái</button>
+    <button type="button" data-target="#daily" data-i18n="nav.daily">🕒 Daily</button>
+    <button type="button" data-target="#acts" data-i18n="nav.acts">🎬 Hoạt cảnh</button>
+    <button type="button" data-target="#cfg" data-i18n="nav.cfg">⚙️ Xiaozhi &amp; Cấu hình</button>
+    <button type="button" data-target="#motion" data-i18n="nav.motion">🦵 Chân / Motion</button>
+  </div>
+</nav>
+
+<section id="wifi" class="container active">
+  <h2 data-i18n="wifi.h2">Bắt Wi‑Fi</h2>
+  <p class="intro" id="wifi_hint" data-i18n="wifi.intro">Chọn mạng nhà, nhập mật khẩu, bấm Lưu. Robot reboot và nối STA.</p>
+  <div class="btns" style="margin-top:0">
+    <button type="button" class="action" id="wifi_scan" data-i18n="wifi.scan">Quét mạng</button>
+    <span id="wifi_scan_st" class="pill"></span>
+  </div>
+  <div id="wifi_list" class="wifi-list"></div>
+  <div class="row" style="margin-top:12px">
+    <div><label data-i18n="wifi.ssid">SSID</label><input id="wifi_ssid" data-i18n-placeholder="wifi.ssid" placeholder="SSID" autocomplete="off"></div>
+    <div><label data-i18n="wifi.pass">Mật khẩu</label><input id="wifi_pass" type="password" data-i18n-placeholder="wifi.pass" placeholder="password" autocomplete="off"></div>
+  </div>
+  <div class="btns"><button type="button" class="primary" id="wifi_save" data-i18n="wifi.save">Lưu &amp; kết nối</button><span id="wifi_saved" class="pill"></span></div>
+</section>
+
+<section id="status" class="container">
+  <h2 data-i18n="status.h2">Trạng thái</h2>
+  <div class="dock-banner" id="dock_banner" data-i18n="status.dock">Đang trên sạc: chỉ phát âm thanh + hoạt cảnh mắt — chân bị khoá để không té.</div>
+  <p class="intro" data-i18n="status.intro">Pin, liên kết K210, chế độ hiện tại.</p>
+  <div class="grid" id="stat"></div>
+  <div class="btns">
+    <button type="button" class="ghost" id="tone" data-i18n="status.tone">Test loa</button>
+    <button type="button" class="ghost" id="micwav" data-i18n="status.mic">Record mic 3s → WAV</button>
+  </div>
+  <div class="meter"><i id="bar"></i></div>
+</section>
+
+<section id="daily" class="container">
+  <h2 data-i18n="daily.h2">Lịch sinh hoạt Daily</h2>
+  <p class="intro" data-i18n="daily.intro">Chỉnh giờ / hoạt cảnh theo khung giờ. Robot tự chạy khi đến giờ (SNTP). Self‑control daily vẫn random ngay.</p>
+  <div class="row">
+    <div><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="daily_en" style="width:auto"> <span data-i18n="daily.enable">Bật lịch theo giờ</span></label></div>
+    <div><label data-i18n="daily.tz">Múi giờ UTC</label><input id="daily_tz" type="number" min="-12" max="14" value="7"></div>
+  </div>
+  <div class="row">
+    <div><label data-i18n="daily.fake">Giờ giả (test, HHMM, −1 = tắt)</label><input id="daily_fake" type="number" value="-1"></div>
+    <div><label data-i18n="daily.now">Hiện tại / tiếp theo</label><div class="pill" id="daily_info">—</div></div>
+  </div>
+  <div id="daily_slots"></div>
+  <div class="btns">
+    <button type="button" class="ghost" id="daily_add" data-i18n="daily.add">+ Thêm khung</button>
+    <button type="button" class="primary" id="daily_save" data-i18n="daily.save">Lưu lịch</button>
+    <button type="button" class="ghost" id="daily_reset" data-i18n="daily.reset">Khôi phục gốc</button>
+    <span id="daily_st" class="pill"></span>
+  </div>
+</section>
+
+<section id="acts" class="container">
+  <h2 data-i18n="acts.h2">Hoạt cảnh Daily</h2>
+  <p class="intro" data-i18n="acts.intro">Chạm để chạy ngay (mặt + tiếng; chân chỉ khi không sạc).</p>
+  <div class="act-grid" id="act_grid"></div>
+  <div class="btns"><button type="button" class="ghost" id="act_random" data-i18n="acts.random">Random 1 hoạt cảnh</button><span id="act_st" class="pill"></span></div>
+</section>
+
+<section id="cfg" class="container">
+  <h2 data-i18n="cfg.h2">Xiaozhi &amp; Cấu hình</h2>
+  <p class="intro" data-i18n="cfg.intro">Ghép cặp Xiaozhi và các tuỳ chọn robot trong một chỗ.</p>
+
+  <h3 class="subh">Xiaozhi</h3>
+  <p class="intro" data-i18n="cfg.xz_help">1) Voice backend = Xiaozhi + Save. 2) Có internet. 3) Lấy mã pair. 4) Vào xiaozhi.me thêm thiết bị.</p>
+  <div class="xz-code" id="xz_code">————</div>
+  <div class="grid" style="margin-top:10px">
+    <b>Device-Id</b><span id="xz_mac">—</span>
+    <b>Client-Id</b><span id="xz_client" style="word-break:break-all">—</span>
+    <b>Status</b><span id="xz_st">—</span>
+  </div>
+  <div class="btns">
+    <button type="button" class="primary" id="xz_pair" data-i18n="cfg.pair">Lấy mã pair</button>
+    <button type="button" class="ghost" id="xz_copy" data-i18n="cfg.copy">Copy mã</button>
+    <button type="button" class="ghost" id="xz_dismiss" data-i18n="cfg.dismiss">Đã pair — ẩn mã</button>
+    <span id="xz_msg" class="pill"></span>
   </div>
 
-  <div class="card">
-    <h2>Power</h2>
-    <small>Drops the power-enable pin: the whole robot switches off, like holding the button. On the charger it may stay powered.</small>
-    <div class="btns"><button id="poweroff" style="background:var(--bad);color:#fff">Turn the robot off</button><span id="powerst" class="pill"></span></div>
+  <h3 class="subh" style="margin-top:22px">Config</h3>
+  <div class="row">
+    <div><label data-i18n="cfg.voice">Voice backend</label>
+      <select id="voice_mode">
+        <option value="emoa">EMOA (local TCP)</option>
+        <option value="xiaozhi">Xiaozhi</option>
+      </select>
+    </div>
+    <div><label data-i18n="cfg.speed">Motion speed %</label><input id="motion_speed" placeholder="100"></div>
   </div>
-</main>
+  <div class="row">
+    <div><label data-i18n="cfg.emoa_ip">EMOA IP</label><input id="host_ip" placeholder="192.168.137.1"></div>
+    <div><label data-i18n="cfg.emoa_port">EMOA port</label><input id="host_port" placeholder="7007"></div>
+  </div>
+  <div class="row">
+    <div><label data-i18n="cfg.ota">Xiaozhi OTA URL</label><input id="ota_url"></div>
+    <div><label data-i18n="cfg.ws">Xiaozhi WS URL</label><input id="ws_url"></div>
+  </div>
+  <div class="row">
+    <div><label data-i18n="cfg.token">Xiaozhi token</label><input id="xz_token" type="password" placeholder="(unchanged)"></div>
+  </div>
+  <div class="row">
+    <div><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="docked" style="width:auto"> <span data-i18n="cfg.docked">Docked / đứng yên</span></label></div>
+    <div><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="explore_enable" checked style="width:auto"> <span data-i18n="cfg.explore">Auto explore</span></label></div>
+  </div>
+  <div class="row">
+    <div><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="idle_faces" checked style="width:auto"> <span data-i18n="cfg.idle">Idle faces</span></label></div>
+    <div><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cliff_enable" checked style="width:auto"> <span data-i18n="cfg.cliff">Cliff interrupt</span></label></div>
+  </div>
+  <div class="row">
+    <div><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="petting_enable" checked style="width:auto"> <span data-i18n="cfg.pet">Petting</span></label></div>
+    <div><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="yolo_react" checked style="width:auto"> <span data-i18n="cfg.yolo">YOLO react</span></label></div>
+  </div>
+  <div class="btns"><button type="button" class="primary" id="save" data-i18n="cfg.save">Save</button><span id="saved" class="pill"></span></div>
+  <div class="btns" style="margin-top:20px"><button type="button" class="danger" id="poweroff" data-i18n="cfg.power">Tắt nguồn robot</button><span id="powerst" class="pill"></span></div>
+</section>
+
+<section id="motion" class="container">
+  <h2 data-i18n="motion.h2">Chân / Motion</h2>
+  <div class="dock-banner" id="dock_banner2" data-i18n="motion.dock">Đang sạc — nút walk/motion bị khoá.</div>
+  <p class="intro" data-i18n="motion.intro">Test gait và file .mot. Tắt Docked / rút sạc trước khi đi.</p>
+  <div class="walkpad">
+    <button type="button" class="ghost" id="walk_left">←</button>
+    <button type="button" class="action" id="walk_fwd">↑</button>
+    <button type="button" class="ghost" id="walk_right">→</button>
+    <button type="button" class="ghost" id="walk_back">↓</button>
+  </div>
+  <div class="btns">
+    <button type="button" class="ghost" id="walk_explore" data-i18n="motion.explore">Explore 20s</button>
+    <button type="button" class="ghost" id="walk_stop" data-i18n="motion.stop">Stop</button>
+    <button type="button" class="ghost" id="walk_wiggle" data-i18n="motion.wiggle">Wiggle</button>
+    <span id="walk_st" class="pill"></span>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <div><label data-i18n="motion.file">Motion file</label><select id="motsel"></select></div>
+    <div><label data-i18n="motion.speed">Speed × / options</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input id="motspeed" placeholder="default" style="width:80px">
+        <label style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" id="motfit" style="width:auto"> fit music</label>
+        <label style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" id="motmedia" checked style="width:auto"> face+mp3</label>
+      </div>
+    </div>
+  </div>
+  <div class="btns">
+    <button type="button" class="primary" id="motplay" data-i18n="motion.play">Play</button>
+    <button type="button" class="ghost" id="motloop" data-i18n="motion.loop">Loop</button>
+    <button type="button" class="ghost" id="motstop" data-i18n="motion.stop">Stop</button>
+    <button type="button" class="ghost" id="motrel" data-i18n="motion.release">Servos off</button>
+    <span id="motst" class="pill"></span>
+  </div>
+  <div class="ctl" id="controls" style="margin-top:16px"></div>
+  <div id="ctlres"></div>
+</section>
+
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

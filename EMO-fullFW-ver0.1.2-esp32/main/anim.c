@@ -32,6 +32,12 @@ static bool find_line(char kind, const char *name, char *out, size_t cap)
     return found;
 }
 
+bool anim_exists(const char *name)
+{
+    char rest[160];
+    return name && *name && (find_line('A', name, rest, sizeof(rest)) || find_line('M', name, rest, sizeof(rest)));
+}
+
 esp_err_t anim_play(const char *name, uint32_t *dur_ms)
 {
     if (dur_ms) *dur_ms = 0;

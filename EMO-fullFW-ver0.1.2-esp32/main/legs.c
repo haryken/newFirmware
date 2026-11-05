@@ -37,6 +37,10 @@ static SemaphoreHandle_t s_api;          // serialises play / pose / stop / rele
 static volatile bool s_stop;             // asks the play task to end
 static volatile bool s_running;          // play task alive
 static legs_status_t s_st;
+static volatile bool s_motion_ok = true; // false on charger: face/sound only
+
+void legs_set_motion_allowed(bool allowed) { s_motion_ok = allowed; }
+bool legs_motion_allowed(void) { return s_motion_ok; }
 static char *s_list_json;                // cached GET list
 static legs_media_cb_t s_media_cb;
 static int64_t s_t0_us;                  // playback start (esp_timer)
@@ -353,6 +357,16 @@ static bool name_ok(const char *n)
 
 esp_err_t legs_play(const char *name, legs_opts_t opts)
 {
+    if (!s_motion_ok) {
+        // Still fire the paired face/music so Daily / shows work on the charger.
+        if (opts.media && name && s_media_cb) {
+            char media[40] = ""; bool mp3 = false; uint32_t mp3_ms = 0;
+            media_for(name, media, sizeof(media), &mp3, &mp3_ms);
+            if (media[0]) s_media_cb(media, mp3);
+        }
+        ESP_LOGW(TAG, "docked: skip mot %s (face only)", name ? name : "?");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!s_st.fs_ok) return ESP_ERR_INVALID_STATE;
     if (!name || !name_ok(name) || strstr(name, "..")) return ESP_ERR_INVALID_ARG;
     if (opts.speed == 0.0f) opts.speed = s_default_speed;
@@ -427,6 +441,7 @@ void legs_stop(void)
 
 esp_err_t legs_pose_hold(const uint8_t deg[4], uint32_t ms, bool hold)
 {
+    if (!s_motion_ok) { ESP_LOGW(TAG, "docked: skip pose"); return ESP_ERR_INVALID_STATE; }
     for (int i = 0; i < 4; i++) if (deg[i] > 180) return ESP_ERR_INVALID_ARG;
     if (ms > MAX_POSE_MS) ms = MAX_POSE_MS;
     xSemaphoreTake(s_api, portMAX_DELAY);
@@ -450,6 +465,7 @@ esp_err_t legs_pose(const uint8_t deg[4], uint32_t ms)
 
 esp_err_t legs_gait(const legs_gait_t *g)
 {
+    if (!s_motion_ok) { ESP_LOGW(TAG, "docked: skip gait"); return ESP_ERR_INVALID_STATE; }
     if (!g || !(g->cycles > 0) || g->cycles > 60 || g->period_ms < 100 || g->period_ms > 5000) return ESP_ERR_INVALID_ARG;
     xSemaphoreTake(s_api, portMAX_DELAY);
     stop_locked();
